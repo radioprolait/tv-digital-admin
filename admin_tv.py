@@ -2,187 +2,310 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import io
+import base64
+from github import Github, Auth, GithubException
 
-# Configuración de página
-st.set_page_config(page_title="Administración TV Digital", page_icon="📺", layout="wide")
+# ============================================================
+# CONFIGURACIÓN DE PÁGINA
+# ============================================================
+st.set_page_config(
+    page_title="Admin TV Digital",
+    page_icon="📺",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Estilos CSS personalizados para estética premium (modo oscuro/azul)
+# ============================================================
+# ESTILOS CSS PREMIUM
+# ============================================================
 st.markdown("""
     <style>
-    /* Estilos para tarjetas métricas */
-    .metric-card {
-        background-color: #1e293b;
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+
+    /* LOGIN PAGE */
+    .login-container {
+        max-width: 420px;
+        margin: 80px auto;
+        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
         border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 20px;
+        border-radius: 20px;
+        padding: 48px 40px;
+        box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);
         text-align: center;
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-        margin-bottom: 15px;
     }
-    .metric-title {
-        font-size: 14px;
-        color: #94a3b8;
-        margin-bottom: 8px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+    .login-logo {
+        font-size: 64px;
+        margin-bottom: 12px;
     }
-    .metric-value {
-        font-size: 32px;
-        color: #38bdf8;
+    .login-title {
+        font-size: 26px;
         font-weight: 700;
+        color: #f1f5f9;
+        margin-bottom: 4px;
     }
-    .metric-value.green {
-        color: #34d399;
+    .login-subtitle {
+        font-size: 14px;
+        color: #64748b;
+        margin-bottom: 32px;
     }
-    .metric-value.orange {
-        color: #fb923c;
+
+    /* TARJETAS MÉTRICAS */
+    .metric-card {
+        background: linear-gradient(135deg, #1e293b 0%, #162032 100%);
+        border: 1px solid #334155;
+        border-radius: 16px;
+        padding: 24px 20px;
+        text-align: center;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        margin-bottom: 15px;
+        transition: transform 0.2s ease;
     }
-    .metric-value.purple {
-        color: #c084fc;
-    }
-    .metric-subtitle {
+    .metric-card:hover { transform: translateY(-2px); }
+    .metric-title {
         font-size: 12px;
         color: #64748b;
-        margin-top: 4px;
+        margin-bottom: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 1px;
     }
+    .metric-value {
+        font-size: 34px;
+        color: #38bdf8;
+        font-weight: 700;
+        line-height: 1;
+    }
+    .metric-value.green  { color: #34d399; }
+    .metric-value.orange { color: #fb923c; }
+    .metric-value.purple { color: #c084fc; }
+    .metric-subtitle {
+        font-size: 12px;
+        color: #475569;
+        margin-top: 6px;
+    }
+
+    /* BADGE DE ESTADO */
+    .badge-pagado   { background:#065f46; color:#6ee7b7; padding:3px 10px; border-radius:99px; font-size:12px; font-weight:600; }
+    .badge-pendiente{ background:#7c2d12; color:#fdba74; padding:3px 10px; border-radius:99px; font-size:12px; font-weight:600; }
     </style>
 """, unsafe_allow_html=True)
 
-CSV_FILE = "base_datos_tv.csv"
+# ============================================================
+# CONFIGURACIÓN: TOKEN Y REPO
+# ============================================================
+REPO_NAME   = "tv-digital-admin"
+CSV_FILE    = "base_datos_tv.csv"
 CONFIG_FILE = "vendedores_config.json"
 
-# --- FUNCIONES DE PERSISTENCIA Y CARGA ---
+def get_token():
+    try:
+        return st.secrets["GITHUB_TOKEN"]
+    except Exception:
+        return os.environ.get("GITHUB_TOKEN", "")
 
-def get_csv_encoding(file_path):
-    if os.path.exists(file_path):
+def get_repo():
+    token = get_token()
+    if not token:
+        st.error("No se encontró el token de GitHub. Configurá los secrets de Streamlit.")
+        st.stop()
+    auth = Auth.Token(token)
+    g = Github(auth=auth)
+    user = g.get_user()
+    return user.get_repo(REPO_NAME)
+
+# ============================================================
+# FUNCIONES DE DATOS — GITHUB
+# ============================================================
+
+def github_read_csv():
+    """Lee el CSV desde el repositorio de GitHub."""
+    try:
+        repo = get_repo()
+        contents = repo.get_contents(CSV_FILE)
+        raw = base64.b64decode(contents.content)
+        # Intentar encodings comunes
         for enc in ['utf-8', 'latin1', 'cp1252']:
             try:
-                # Intentamos leer TODO el archivo para garantizar que decodifique completo sin errores
-                pd.read_csv(file_path, encoding=enc)
-                return enc
+                text = raw.decode(enc)
+                break
             except Exception:
                 continue
-    return 'utf-8'
-
-@st.cache_data
-def load_data_raw(file_path, file_mtime):
-    if os.path.exists(file_path):
-        enc = get_csv_encoding(file_path)
-        # Leemos el archivo CSV con la codificación detectada
-        df = pd.read_csv(file_path, encoding=enc)
-        # Limpiamos los textos
+        df = pd.read_csv(io.StringIO(text))
         for col in df.columns:
             df[col] = df[col].astype(str).str.strip().replace('nan', '')
-        return df
-    else:
-        return pd.DataFrame(columns=["Nombre", "Telefono", "Equipo", "Mes", "Vendedor"])
+        return df, contents.sha
+    except GithubException as e:
+        if e.status == 404:
+            # El archivo no existe aún, devolvemos vacío
+            empty = pd.DataFrame(columns=["Nombre", "Telefono", "Equipo", "Mes", "Vendedor"])
+            return empty, None
+        st.error(f"Error GitHub al leer datos: {e}")
+        return pd.DataFrame(columns=["Nombre", "Telefono", "Equipo", "Mes", "Vendedor"]), None
 
-def save_data(df, file_path):
-    enc = get_csv_encoding(file_path)
-    df.to_csv(file_path, index=False, encoding=enc)
-    st.cache_data.clear()
+def github_write_csv(df, sha):
+    """Guarda el DataFrame como CSV en GitHub."""
+    try:
+        repo = get_repo()
+        csv_content = df.to_csv(index=False, encoding='utf-8')
+        if sha:
+            repo.update_file(CSV_FILE, "Actualizar base de clientes", csv_content, sha)
+        else:
+            repo.create_file(CSV_FILE, "Crear base de clientes", csv_content)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar datos: {e}")
+        return False
 
+def github_read_json(filename):
+    """Lee un JSON desde GitHub."""
+    try:
+        repo = get_repo()
+        contents = repo.get_contents(filename)
+        raw = base64.b64decode(contents.content).decode('utf-8')
+        return json.loads(raw), contents.sha
+    except GithubException as e:
+        if e.status == 404:
+            return None, None
+        return None, None
 
-def load_sellers_config(df):
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                config = json.load(f)
-                migrated = False
-                # Migración de configuración antigua a la nueva estructura "precio_vendedor"
-                for v, data in config.items():
-                    if "valor_comision" in data:
-                        val_com = data.get("valor_comision", 0)
-                        if v.upper() == 'PROPIO':
-                            data["precio_vendedor"] = 10000.0
-                        elif v.upper() == 'ALEXIS':
-                            data["precio_vendedor"] = 5000.0
-                        elif v.upper() in ['MICA', 'NOE', 'EUGE']:
-                            data["precio_vendedor"] = 4000.0
-                        else:
-                            data["precio_vendedor"] = 10000.0 - val_com if val_com < 10000 else 4000.0
-                        del data["valor_comision"]
-                        if "tipo_comision" in data:
-                            del data["tipo_comision"]
-                        migrated = True
-                if migrated:
-                    save_sellers_config(config)
-                return config
-        except Exception:
-            pass
-            
-    # Si no existe, creamos la configuración inicial basada en los vendedores del CSV
-    vendedores_detectados = []
-    if 'Vendedor' in df.columns:
-        vendedores_detectados = [v for v in df['Vendedor'].unique() if v]
-    
-    if not vendedores_detectados:
-        vendedores_detectados = ['PROPIO', 'NOE', 'EUGE', 'MICA', 'ALEXIS']
-        
+def github_write_json(filename, data, sha, commit_msg="Actualizar configuración"):
+    """Guarda un JSON en GitHub."""
+    try:
+        repo = get_repo()
+        content = json.dumps(data, indent=4, ensure_ascii=False)
+        if sha:
+            repo.update_file(filename, commit_msg, content, sha)
+        else:
+            repo.create_file(filename, commit_msg, content)
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar configuración: {e}")
+        return False
+
+# ============================================================
+# SISTEMA DE LOGIN
+# ============================================================
+
+def get_users():
+    """Obtiene los usuarios desde secrets o por defecto."""
+    try:
+        users_raw = st.secrets.get("USERS", '{"admin": "tv2024"}')
+        return json.loads(users_raw)
+    except Exception:
+        return {"admin": "tv2024"}
+
+def show_login():
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    with col2:
+        st.markdown("""
+            <div class="login-container">
+                <div class="login-logo">📺</div>
+                <div class="login-title">TV Digital Admin</div>
+                <div class="login-subtitle">Sistema de Gestión Privado</div>
+            </div>
+        """, unsafe_allow_html=True)
+        st.write("")
+        with st.form("login_form"):
+            usuario = st.text_input("👤 Usuario", placeholder="Ingresá tu usuario")
+            password = st.text_input("🔒 Contraseña", type="password", placeholder="Ingresá tu contraseña")
+            submitted = st.form_submit_button("Ingresar al Sistema →", use_container_width=True)
+            if submitted:
+                users = get_users()
+                if usuario in users and users[usuario] == password:
+                    st.session_state.logged_in  = True
+                    st.session_state.username   = usuario
+                    st.rerun()
+                else:
+                    st.error("Usuario o contraseña incorrectos.")
+
+def logout():
+    st.session_state.logged_in = False
+    st.session_state.username  = ""
+    st.rerun()
+
+# ============================================================
+# CARGA INICIAL CON CACHÉ
+# ============================================================
+
+@st.cache_data(ttl=60)
+def load_data_cached(_token_hash):
+    return github_read_csv()
+
+@st.cache_data(ttl=60)
+def load_config_cached(_token_hash):
+    return github_read_json(CONFIG_FILE)
+
+# ============================================================
+# MAIN APP
+# ============================================================
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "username" not in st.session_state:
+    st.session_state.username = ""
+
+# Mostrar login si no está autenticado
+if not st.session_state.logged_in:
+    show_login()
+    st.stop()
+
+# ---- USUARIO AUTENTICADO ----
+token = get_token()
+token_hash = hash(token)  # Para cache_data (no pasamos el token directo)
+
+# Cargar datos
+df_raw, csv_sha = load_data_cached(token_hash)
+config_data, config_sha = load_config_cached(token_hash)
+
+# ---- CONFIGURACIÓN DE VENDEDORES ----
+def get_default_config(df):
     config = {}
-    for v in vendedores_detectados:
+    vendedores = [v for v in df['Vendedor'].unique() if v and v != ''] if 'Vendedor' in df.columns else []
+    if not vendedores:
+        vendedores = ['PROPIO', 'NOE', 'EUGE', 'MICA', 'ALEXIS']
+    for v in vendedores:
         if v.upper() == 'PROPIO':
             precio = 10000.0
         elif v.upper() == 'ALEXIS':
             precio = 5000.0
-        elif v.upper() in ['MICA', 'NOE', 'EUGE']:
-            precio = 4000.0
         else:
             precio = 4000.0
-            
-        config[v] = {
-            "nombre": v,
-            "precio_vendedor": precio
-        }
-        
-    save_sellers_config(config)
+        config[v] = {"nombre": v, "precio_vendedor": precio}
     return config
 
-def save_sellers_config(config):
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=4, ensure_ascii=False)
+if config_data is None:
+    config_data = get_default_config(df_raw)
+    github_write_json(CONFIG_FILE, config_data, None)
 
+vendedores_config = config_data
 
-
-# --- INICIO DE LA APLICACIÓN ---
-
-if not os.path.exists(CSV_FILE):
-    st.error(f"❌ No se encontró el archivo '{CSV_FILE}' en la carpeta actual.")
-    st.info("Por favor, asegúrate de colocar el archivo de base de datos en la carpeta del proyecto.")
-    st.stop()
-
-# Cargar datos e invalidar caché si el archivo cambia en disco
-file_mtime = os.path.getmtime(CSV_FILE) if os.path.exists(CSV_FILE) else 0
-df_raw = load_data_raw(CSV_FILE, file_mtime)
-
-# Cargar configuración de vendedores
-vendedores_config = load_sellers_config(df_raw)
-
-# Sidebar - Configuración del Abono General
+# ---- SIDEBAR ----
 st.sidebar.title("⚙️ Configuración")
 abono_general = st.sidebar.number_input(
-    "Valor del Abono Mensual ($)", 
-    min_value=0, 
-    value=5000, 
-    step=500, 
-    help="El precio de suscripción mensual cobrado a cada cliente."
+    "Valor del Abono ($)",
+    min_value=0, value=5000, step=500,
+    help="Precio mensual cobrado a cada cliente."
 )
+st.sidebar.divider()
+st.sidebar.write(f"👤 Sesión: **{st.session_state.username}**")
+if st.sidebar.button("🚪 Cerrar Sesión"):
+    logout()
 
-st.title("📺 Panel de Control - TV Digital")
-st.write("Sistema de visualización, cobros y cálculo de comisiones.")
+# ---- TÍTULO ----
+st.title("📺 Panel de Control — TV Digital")
+st.write("Sistema de gestión de clientes, cobros y comisiones.")
 
-# --- PREPROCESAMIENTO DE DATOS ---
+# ---- PREPROCESAMIENTO ----
 df = df_raw.copy()
-
-# Determinar estado de pago
-# Si la columna 'Mes' contiene '[P]' o '[p]' (ej: 'MAYO [P]'), está pagado.
-df['Pagado'] = df['Mes'].apply(lambda x: '[P]' in str(x).upper())
-
-# Mes limpio (sin el indicador de pago)
+df['Pagado']     = df['Mes'].apply(lambda x: '[P]' in str(x).upper())
 df['Mes_Limpio'] = df['Mes'].apply(lambda x: str(x).split('[')[0].strip().upper())
 
-# Calcular lo que te paga el vendedor y la comisión por fila
 def calcular_precio_vendedor(row):
     vend = row['Vendedor'] if row['Vendedor'] else 'SIN ASIGNAR'
     if vend in vendedores_config:
@@ -194,415 +317,330 @@ def calcular_precio_vendedor(row):
 
 df['Precio_Vendedor'] = df.apply(calcular_precio_vendedor, axis=1)
 df['Monto_Facturado'] = abono_general
+df['Comision_Valor']  = df['Monto_Facturado'] - df['Precio_Vendedor']
+df['Ganancia_Valor']  = df['Precio_Vendedor']
 
-# Comisión de la fila (lo que se queda el vendedor)
-df['Comision_Valor'] = df['Monto_Facturado'] - df['Precio_Vendedor']
-# La ganancia de la fila es lo que te pagan a vos (Precio_Vendedor)
-df['Ganancia_Valor'] = df['Precio_Vendedor']
-
-
-# Pestañas principales
+# ---- TABS ----
 tab_dashboard, tab_clientes, tab_pagos, tab_vendedores = st.tabs([
-    "📊 Tablero General", 
-    "👥 Clientes y Filtros", 
-    "💰 Registrar Pagos / CRUD", 
+    "📊 Tablero General",
+    "👥 Clientes y Filtros",
+    "💰 Registrar Pagos / CRUD",
     "⚙️ Gestión de Vendedores"
 ])
 
-# ----------------- TABS 1: TABLERO GENERAL -----------------
+# ===================================================
+# TAB 1 — TABLERO GENERAL
+# ===================================================
 with tab_dashboard:
     st.subheader("📈 Resumen del Negocio")
-    
-    # Cálculos globales
-    total_clientes = len(df)
-    total_pagos = len(df[df['Pagado'] == True])
-    total_impagos = len(df[df['Pagado'] == False])
-    
-    # Bruto facturado a clientes
-    recaudacion_bruta_clientes = total_pagos * abono_general
-    
-    # Neto recibido por el administrador (lo que te pagan a vos)
-    plata_cobrada_neta = df[df['Pagado'] == True]['Precio_Vendedor'].sum()
-    plata_pendiente_neta = df[df['Pagado'] == False]['Precio_Vendedor'].sum()
-    
-    # Comisiones retenidas por vendedores
-    comisiones_pagos = df[df['Pagado'] == True]['Comision_Valor'].sum()
-    
-    # Tarjetas métricas
+
+    total_clientes         = len(df)
+    total_pagos            = len(df[df['Pagado'] == True])
+    total_impagos          = len(df[df['Pagado'] == False])
+    recaudacion_bruta      = total_pagos * abono_general
+    plata_cobrada_neta     = df[df['Pagado'] == True]['Precio_Vendedor'].sum()
+    plata_pendiente_neta   = df[df['Pagado'] == False]['Precio_Vendedor'].sum()
+    comisiones_pagos       = df[df['Pagado'] == True]['Comision_Valor'].sum()
+
     col1, col2, col3, col4 = st.columns(4)
-    
     with col1:
-        st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Clientes Totales</div>
-                <div class="metric-value">{total_clientes}</div>
-                <div class="metric-subtitle">Pagados: {total_pagos} | Pendientes: {total_impagos}</div>
-            </div>
-        """, unsafe_allow_html=True)
-        
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-title">Clientes Totales</div>
+            <div class="metric-value">{total_clientes}</div>
+            <div class="metric-subtitle">Pagados: {total_pagos} | Pendientes: {total_impagos}</div>
+        </div>""", unsafe_allow_html=True)
     with col2:
-        st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Tu Plata Cobrada (Neto)</div>
-                <div class="metric-value green">${plata_cobrada_neta:,.0f}</div>
-                <div class="metric-subtitle">Bruto Clientes: ${recaudacion_bruta_clientes:,.0f}</div>
-            </div>
-        """, unsafe_allow_html=True)
-        
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-title">Tu Plata Cobrada (Neto)</div>
+            <div class="metric-value green">${plata_cobrada_neta:,.0f}</div>
+            <div class="metric-subtitle">Bruto clientes: ${recaudacion_bruta:,.0f}</div>
+        </div>""", unsafe_allow_html=True)
     with col3:
-        st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Tu Plata Pendiente (Neto)</div>
-                <div class="metric-value orange">${plata_pendiente_neta:,.0f}</div>
-                <div class="metric-subtitle">De {total_impagos} clientes impagos</div>
-            </div>
-        """, unsafe_allow_html=True)
-        
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-title">Tu Plata Pendiente (Neto)</div>
+            <div class="metric-value orange">${plata_pendiente_neta:,.0f}</div>
+            <div class="metric-subtitle">De {total_impagos} clientes impagos</div>
+        </div>""", unsafe_allow_html=True)
     with col4:
-        st.markdown(f"""
-            <div class="metric-card">
-                <div class="metric-title">Comisiones Vendedores</div>
-                <div class="metric-value purple">${comisiones_pagos:,.0f}</div>
-                <div class="metric-subtitle">Retenido por los vendedores</div>
-            </div>
-        """, unsafe_allow_html=True)
-        
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-title">Comisiones Vendedores</div>
+            <div class="metric-value purple">${comisiones_pagos:,.0f}</div>
+            <div class="metric-subtitle">Retenido por vendedores</div>
+        </div>""", unsafe_allow_html=True)
+
     st.divider()
-    
-    # Alta Rápida de Nuevos Clientes
-    with st.expander("➕ **PUM! AGREGAR NUEVO CLIENTE (Alta Rápida)**", expanded=False):
+
+    # Alta Rápida
+    with st.expander("➕  PUM! — AGREGAR NUEVO CLIENTE (Alta Rápida)", expanded=False):
         col_c1, col_c2 = st.columns(2)
         with col_c1:
-            c_nombre = st.text_input("Nombre Completo", key="quick_c_nombre")
-            c_tel = st.text_input("Teléfono", key="quick_c_tel")
-            c_vendedor = st.selectbox("Vendedor Asignado", list(vendedores_config.keys()), key="quick_c_vendedor")
+            c_nombre   = st.text_input("Nombre Completo", key="qc_nombre")
+            c_tel      = st.text_input("Teléfono", key="qc_tel")
+            c_vendedor = st.selectbox("Vendedor Asignado", list(vendedores_config.keys()), key="qc_vendedor")
         with col_c2:
-            c_equipo = st.selectbox("Equipo", ["ANDROID", "Sin Asignar"], key="quick_c_equipo")
-            c_mes_nombre = st.selectbox("Mes de Facturación", ["MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"], index=1, key="quick_c_mes") # Default a JUNIO
-            c_pagado = st.checkbox("¿Registrar como PAGADO?", value=False, key="quick_c_pagado")
-            
-        if st.button("🚀 PUM! CREAR CLIENTE", key="quick_c_btn"):
+            c_equipo   = st.selectbox("Equipo", ["ANDROID", "Sin Asignar"], key="qc_equipo")
+            c_mes      = st.selectbox("Mes de Facturación",
+                ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
+                 "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"],
+                index=5, key="qc_mes")
+            c_pagado   = st.checkbox("Registrar como PAGADO", value=False, key="qc_pagado")
+
+        if st.button("🚀 PUM! CREAR CLIENTE", key="qc_btn"):
             if not c_nombre.strip():
-                st.error("Por favor, ingresá un nombre para el cliente.")
+                st.error("Ingresá un nombre para el cliente.")
             else:
-                c_mes_salida = f"{c_mes_nombre} [P]" if c_pagado else c_mes_nombre
+                mes_sal = f"{c_mes} [P]" if c_pagado else c_mes
                 nueva_fila = {
                     "Nombre": c_nombre.strip().upper(),
                     "Telefono": c_tel.strip(),
                     "Equipo": c_equipo,
-                    "Mes": c_mes_salida,
+                    "Mes": mes_sal,
                     "Vendedor": c_vendedor
                 }
-                
-                # Leer base de datos cruda del disco
-                df_raw_actual = load_data_raw(CSV_FILE, os.path.getmtime(CSV_FILE))
-                # Concatenar el nuevo registro
-                df_raw_actual = pd.concat([df_raw_actual, pd.DataFrame([nueva_fila])], ignore_index=True)
-                # Guardar cambios
-                save_data(df_raw_actual, CSV_FILE)
-                st.success(f"¡Cliente {c_nombre.upper()} agregado con éxito!")
-                st.rerun()
-                
+                df_nuevo = pd.concat([df_raw, pd.DataFrame([nueva_fila])], ignore_index=True)
+                with st.spinner("Guardando en la nube..."):
+                    ok = github_write_csv(df_nuevo, csv_sha)
+                if ok:
+                    st.success(f"Cliente {c_nombre.upper()} agregado!")
+                    st.rerun()
+
     st.divider()
-    
+
     # Métricas por vendedor
-    st.subheader("👤 Rentabilidad y Métricas por Vendedor")
-    
+    st.subheader("👤 Rentabilidad por Vendedor")
     vendedor_stats = []
     for vend, conf in vendedores_config.items():
-        sub_df = df[df['Vendedor'] == vend]
-        c_totales = len(sub_df)
-        c_pagos = len(sub_df[sub_df['Pagado'] == True])
-        c_pendientes = len(sub_df[sub_df['Pagado'] == False])
-        
-        cobrado_clientes = c_pagos * abono_general
-        recaudacion_neta = sub_df[sub_df['Pagado'] == True]['Precio_Vendedor'].sum()
-        recaudacion_pendiente = sub_df[sub_df['Pagado'] == False]['Precio_Vendedor'].sum()
-        comisiones = sub_df[sub_df['Pagado'] == True]['Comision_Valor'].sum()
-        
-        margen = (recaudacion_neta / cobrado_clientes * 100) if cobrado_clientes > 0 else 0.0
-        
+        sub  = df[df['Vendedor'] == vend]
+        c_t  = len(sub)
+        c_p  = len(sub[sub['Pagado'] == True])
+        c_pend = len(sub[sub['Pagado'] == False])
+        cobrado   = c_p * abono_general
+        neta      = sub[sub['Pagado'] == True]['Precio_Vendedor'].sum()
+        pendiente = sub[sub['Pagado'] == False]['Precio_Vendedor'].sum()
+        comis     = sub[sub['Pagado'] == True]['Comision_Valor'].sum()
+        margen    = (neta / cobrado * 100) if cobrado > 0 else 0.0
         vendedor_stats.append({
             "Vendedor": vend,
-            "Clientes Totales": c_totales,
-            "Clientes Pagos": c_pagos,
-            "Clientes Pendientes": c_pendientes,
-            "Cobrado Clientes ($)": cobrado_clientes,
-            "Comisión Vendedor ($)": comisiones,
-            "Tu Recaudación Real ($)": recaudacion_neta,
-            "Margen de Ganancia (%)": f"{margen:.1f}%"
+            "Clientes": c_t,
+            "Pagos": c_p,
+            "Pendientes": c_pend,
+            "Cobrado Clientes ($)": cobrado,
+            "Comisión ($)": comis,
+            "Tu Recaudación ($)": neta,
+            "Margen (%)": f"{margen:.1f}%"
         })
-        
-    df_vendedores = pd.DataFrame(vendedor_stats)
-    
-    # Mostrar tabla de vendedores
-    st.dataframe(df_vendedores, use_container_width=True, hide_index=True)
-    
-    # Gráficos sencillos
+
+    df_vend = pd.DataFrame(vendedor_stats)
+    st.dataframe(df_vend, use_container_width=True, hide_index=True)
+
     st.subheader("📊 Comparación Visual")
-    col_chart1, col_chart2 = st.columns(2)
-    
-    with col_chart1:
-        st.write("**Clientes Pagos vs Pendientes por Vendedor**")
-        df_chart_data = df_vendedores.set_index("Vendedor")[["Clientes Pagos", "Clientes Pendientes"]]
-        st.bar_chart(df_chart_data)
-        
-    with col_chart2:
-        st.write("**Tu Recaudación Real por Vendedor ($)**")
-        df_chart_money = df_vendedores.set_index("Vendedor")[["Tu Recaudación Real ($)"]]
-        st.bar_chart(df_chart_money)
+    col_g1, col_g2 = st.columns(2)
+    with col_g1:
+        st.write("**Clientes Pagos vs Pendientes**")
+        st.bar_chart(df_vend.set_index("Vendedor")[["Pagos", "Pendientes"]])
+    with col_g2:
+        st.write("**Tu Recaudación Real ($)**")
+        st.bar_chart(df_vend.set_index("Vendedor")[["Tu Recaudación ($)"]])
 
 
-# ----------------- TABS 2: CLIENTES Y FILTROS -----------------
+# ===================================================
+# TAB 2 — CLIENTES Y FILTROS
+# ===================================================
 with tab_clientes:
-    st.subheader("🔍 Filtros de Búsqueda")
-    
+    st.subheader("Buscar y Filtrar Clientes")
+
     col_f1, col_f2, col_f3, col_f4 = st.columns(4)
-    
     with col_f1:
-        busqueda = st.text_input("Buscar cliente por nombre o teléfono")
-        
+        busqueda = st.text_input("Buscar por nombre o teléfono")
     with col_f2:
-        vendedores_options = ["Todos"] + list(vendedores_config.keys())
-        filtro_vendedor = st.selectbox("Filtrar por Vendedor", vendedores_options)
-        
+        filtro_vendedor = st.selectbox("Filtrar por Vendedor", ["Todos"] + list(vendedores_config.keys()))
     with col_f3:
         filtro_estado = st.selectbox("Estado de Pago", ["Todos", "Pagados", "Pendientes"])
-        
     with col_f4:
-        equipos_detectados = ["Todos"] + [eq for eq in df['Equipo'].unique() if eq]
-        filtro_equipo = st.selectbox("Filtrar por Equipo", equipos_detectados)
-        
-    # Aplicar filtros
+        equipos = ["Todos"] + [eq for eq in df['Equipo'].unique() if eq]
+        filtro_equipo = st.selectbox("Filtrar por Equipo", equipos)
+
     df_filtrado = df.copy()
-    
     if busqueda:
         df_filtrado = df_filtrado[
             df_filtrado['Nombre'].str.contains(busqueda, case=False, na=False) |
             df_filtrado['Telefono'].str.contains(busqueda, case=False, na=False)
         ]
-        
     if filtro_vendedor != "Todos":
         df_filtrado = df_filtrado[df_filtrado['Vendedor'] == filtro_vendedor]
-        
     if filtro_estado == "Pagados":
         df_filtrado = df_filtrado[df_filtrado['Pagado'] == True]
     elif filtro_estado == "Pendientes":
         df_filtrado = df_filtrado[df_filtrado['Pagado'] == False]
-        
     if filtro_equipo != "Todos":
         df_filtrado = df_filtrado[df_filtrado['Equipo'] == filtro_equipo]
-        
-    # Mostrar base limpia
-    st.write(f"Mostrando **{len(df_filtrado)}** clientes de un total de **{len(df)}**.")
-    
-    # Preparar tabla para visualización limpia
-    df_vista = df_filtrado[["Nombre", "Telefono", "Equipo", "Mes", "Vendedor"]].copy()
-    
-    # Función para colorear el estado de pago de forma premium
-    def color_pago(val):
-        color = '#10b981' if '[P]' in str(val).upper() else '#f97316'
-        return f'background-color: {color}; color: white; font-weight: bold; border-radius: 4px;'
-        
-    # Aplicar estilos
-    try:
-        styled_df = df_vista.style.map(color_pago, subset=['Mes'])
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
-    except Exception:
-        # En versiones antiguas de pandas se usaba applymap
-        styled_df = df_vista.style.applymap(color_pago, subset=['Mes'])
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-# ----------------- TABS 3: REGISTRAR PAGOS / CRUD -----------------
+    st.write(f"Mostrando **{len(df_filtrado)}** clientes de **{len(df)}** totales.")
+
+    df_vista = df_filtrado[["Nombre", "Telefono", "Equipo", "Mes", "Vendedor"]].copy()
+
+    def color_pago(val):
+        if '[P]' in str(val).upper():
+            return 'background-color: #065f46; color: #6ee7b7; font-weight: bold;'
+        return 'background-color: #7c2d12; color: #fdba74; font-weight: bold;'
+
+    try:
+        styled = df_vista.style.map(color_pago, subset=['Mes'])
+    except Exception:
+        styled = df_vista.style.applymap(color_pago, subset=['Mes'])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
+# ===================================================
+# TAB 3 — REGISTRAR PAGOS / CRUD
+# ===================================================
 with tab_pagos:
-    subtab_modificar, subtab_crear, subtab_eliminar = st.tabs([
-        "💳 Modificar Cliente / Registrar Pago", 
+    subtab_mod, subtab_crear, subtab_del = st.tabs([
+        "💳 Modificar / Registrar Pago",
         "➕ Agregar Nuevo Cliente",
         "❌ Eliminar Cliente"
     ])
-    
-    # --- SUBTAB: MODIFICAR / REGISTRAR PAGO ---
-    with subtab_modificar:
-        st.subheader("Selecciona un Cliente para Gestionar")
-        
-        # Lista ordenada de clientes
+
+    # --- MODIFICAR ---
+    with subtab_mod:
+        st.subheader("Seleccioná un Cliente para Gestionar")
         lista_clientes = sorted(df['Nombre'].tolist())
-        cliente_seleccionado = st.selectbox("Elegí el cliente", lista_clientes)
-        
-        if cliente_seleccionado:
-            # Obtener datos del cliente actual
-            datos_cliente = df_raw[df_raw['Nombre'] == cliente_seleccionado].iloc[0]
-            
-            # Determinar si está pagado actualmente
-            esta_pagado = '[P]' in str(datos_cliente['Mes']).upper()
-            mes_limpio_cliente = str(datos_cliente['Mes']).split('[')[0].strip().upper()
-            
+        cliente_sel = st.selectbox("Elegí el cliente", lista_clientes)
+
+        if cliente_sel:
+            datos = df_raw[df_raw['Nombre'] == cliente_sel].iloc[0]
+            esta_pagado   = '[P]' in str(datos['Mes']).upper()
+            mes_limpio    = str(datos['Mes']).split('[')[0].strip().upper()
+
             st.write("---")
             col_m1, col_m2 = st.columns(2)
-            
             with col_m1:
-                nuevo_nombre = st.text_input("Nombre Completo", datos_cliente['Nombre'])
-                nuevo_tel = st.text_input("Teléfono", datos_cliente['Telefono'])
-                
-                # Cargar selector de vendedor con las opciones actuales
-                lista_vendedores = list(vendedores_config.keys())
-                vendedor_actual = datos_cliente['Vendedor'] if datos_cliente['Vendedor'] in lista_vendedores else lista_vendedores[0]
-                nuevo_vendedor = st.selectbox("Vendedor Asignado", lista_vendedores, index=lista_vendedores.index(vendedor_actual))
-                
+                nuevo_nombre   = st.text_input("Nombre Completo", datos['Nombre'])
+                nuevo_tel      = st.text_input("Teléfono", datos['Telefono'])
+                lista_vend     = list(vendedores_config.keys())
+                vend_actual    = datos['Vendedor'] if datos['Vendedor'] in lista_vend else lista_vend[0]
+                nuevo_vendedor = st.selectbox("Vendedor", lista_vend, index=lista_vend.index(vend_actual))
             with col_m2:
-                nuevo_equipo = st.selectbox("Equipo", ["ANDROID", "Sin Asignar"], index=0 if datos_cliente['Equipo'] == "ANDROID" else 1)
-                
-                meses_lista = ["MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE", "ENERO", "FEBRERO", "MARZO", "ABRIL"]
-                mes_actual_index = meses_lista.index(mes_limpio_cliente) if mes_limpio_cliente in meses_lista else 0
-                nuevo_mes_nombre = st.selectbox("Mes de Facturación", meses_lista, index=mes_actual_index)
-                
-                nuevo_estado_pago = st.checkbox("¿Registrar como PAGADO?", value=esta_pagado)
-                
-            # Formatear el mes de salida
-            mes_salida = f"{nuevo_mes_nombre} [P]" if nuevo_estado_pago else nuevo_mes_nombre
-            
-            if st.button("💾 Guardar Cambios del Cliente"):
-                # Encontrar el índice en df_raw
-                idx = df_raw[df_raw['Nombre'] == cliente_seleccionado].index[0]
-                
-                # Actualizar datos
-                df_raw.at[idx, 'Nombre'] = nuevo_nombre.strip().upper()
-                df_raw.at[idx, 'Telefono'] = nuevo_tel.strip()
-                df_raw.at[idx, 'Equipo'] = nuevo_equipo
-                df_raw.at[idx, 'Mes'] = mes_salida
-                df_raw.at[idx, 'Vendedor'] = nuevo_vendedor
-                
-                # Guardar en CSV
-                save_data(df_raw, CSV_FILE)
-                st.success(f"¡Datos de {cliente_seleccionado} actualizados correctamente!")
-                st.rerun()
+                nuevo_equipo   = st.selectbox("Equipo", ["ANDROID", "Sin Asignar"],
+                                              index=0 if datos['Equipo'] == "ANDROID" else 1)
+                meses_lista    = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
+                                  "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"]
+                mes_idx        = meses_lista.index(mes_limpio) if mes_limpio in meses_lista else 0
+                nuevo_mes      = st.selectbox("Mes de Facturación", meses_lista, index=mes_idx)
+                nuevo_pagado   = st.checkbox("Registrar como PAGADO", value=esta_pagado)
 
-    # --- SUBTAB: AGREGAR CLIENTE ---
+            mes_salida = f"{nuevo_mes} [P]" if nuevo_pagado else nuevo_mes
+
+            if st.button("Guardar Cambios del Cliente"):
+                idx = df_raw[df_raw['Nombre'] == cliente_sel].index[0]
+                df_raw.at[idx, 'Nombre']   = nuevo_nombre.strip().upper()
+                df_raw.at[idx, 'Telefono'] = nuevo_tel.strip()
+                df_raw.at[idx, 'Equipo']   = nuevo_equipo
+                df_raw.at[idx, 'Mes']      = mes_salida
+                df_raw.at[idx, 'Vendedor'] = nuevo_vendedor
+                with st.spinner("Guardando en la nube..."):
+                    ok = github_write_csv(df_raw, csv_sha)
+                if ok:
+                    st.success(f"Datos de {cliente_sel} actualizados!")
+                    st.rerun()
+
+    # --- AGREGAR ---
     with subtab_crear:
         st.subheader("Registrar un Nuevo Cliente")
-        
         col_c1, col_c2 = st.columns(2)
-        
         with col_c1:
-            c_nombre = st.text_input("Nombre Completo (Nuevo)")
-            c_tel = st.text_input("Teléfono (Nuevo)")
-            c_vendedor = st.selectbox("Vendedor (Nuevo)", list(vendedores_config.keys()))
-            
+            c_nombre2   = st.text_input("Nombre Completo", key="nc_nombre")
+            c_tel2      = st.text_input("Teléfono", key="nc_tel")
+            c_vendedor2 = st.selectbox("Vendedor", list(vendedores_config.keys()), key="nc_vend")
         with col_c2:
-            c_equipo = st.selectbox("Equipo (Nuevo)", ["ANDROID", "Sin Asignar"])
-            c_mes_nombre = st.selectbox("Mes de Facturación (Nuevo)", ["MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"])
-            c_pagado = st.checkbox("¿Registrar como PAGADO inicialmente?")
-            
-        c_mes_salida = f"{c_mes_nombre} [P]" if c_pagado else c_mes_nombre
-        
-        if st.button("➕ Crear y Guardar Cliente"):
-            if not c_nombre.strip():
-                st.error("Por favor, ingresá un nombre válido.")
-            else:
-                # Crear nueva fila
-                nueva_fila = {
-                    "Nombre": c_nombre.strip().upper(),
-                    "Telefono": c_tel.strip(),
-                    "Equipo": c_equipo,
-                    "Mes": c_mes_salida,
-                    "Vendedor": c_vendedor
-                }
-                
-                # Añadir al df_raw
-                df_raw = pd.concat([df_raw, pd.DataFrame([nueva_fila])], ignore_index=True)
-                
-                # Guardar
-                save_data(df_raw, CSV_FILE)
-                st.success(f"¡Cliente {c_nombre.upper()} agregado con éxito!")
-                st.rerun()
+            c_equipo2   = st.selectbox("Equipo", ["ANDROID", "Sin Asignar"], key="nc_equipo")
+            c_mes2      = st.selectbox("Mes de Facturación",
+                ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
+                 "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"], key="nc_mes")
+            c_pagado2   = st.checkbox("Registrar como PAGADO", key="nc_pagado")
 
-    # --- SUBTAB: ELIMINAR CLIENTE ---
-    with subtab_eliminar:
-        st.subheader("Eliminar un Cliente de la Base de Datos")
-        
-        cliente_a_eliminar = st.selectbox("Selecciona el cliente a dar de baja", sorted(df['Nombre'].tolist()), key="eliminar_sel")
-        
-        st.warning(f"⚠️ Atención: Estás por eliminar definitivamente a **{cliente_a_eliminar}**.")
-        confirmar_eliminacion = st.checkbox("Confirmo que deseo borrar este registro de forma permanente.")
-        
-        if st.button("🗑️ Eliminar Registro"):
-            if confirmar_eliminacion:
-                # Filtrar fuera el registro
-                df_raw = df_raw[df_raw['Nombre'] != cliente_a_eliminar]
-                # Guardar
-                save_data(df_raw, CSV_FILE)
-                st.success(f"¡El cliente {cliente_a_eliminar} fue removido de la base de datos!")
-                st.rerun()
+        if st.button("Crear y Guardar Cliente"):
+            if not c_nombre2.strip():
+                st.error("Ingresá un nombre válido.")
             else:
-                st.error("Debes marcar la casilla de confirmación antes de eliminar.")
+                mes_sal2 = f"{c_mes2} [P]" if c_pagado2 else c_mes2
+                nueva    = {"Nombre": c_nombre2.strip().upper(), "Telefono": c_tel2.strip(),
+                            "Equipo": c_equipo2, "Mes": mes_sal2, "Vendedor": c_vendedor2}
+                df_nuevo = pd.concat([df_raw, pd.DataFrame([nueva])], ignore_index=True)
+                with st.spinner("Guardando en la nube..."):
+                    ok = github_write_csv(df_nuevo, csv_sha)
+                if ok:
+                    st.success(f"Cliente {c_nombre2.upper()} agregado!")
+                    st.rerun()
 
-# ----------------- TABS 4: GESTIÓN DE VENDEDORES -----------------
+    # --- ELIMINAR ---
+    with subtab_del:
+        st.subheader("Eliminar un Cliente")
+        cliente_del = st.selectbox("Cliente a dar de baja", sorted(df['Nombre'].tolist()), key="del_sel")
+        st.warning(f"Atencion: Estas por eliminar permanentemente a **{cliente_del}**.")
+        confirmar   = st.checkbox("Confirmo que deseo borrar este registro de forma permanente.")
+
+        if st.button("Eliminar Registro"):
+            if confirmar:
+                df_filt = df_raw[df_raw['Nombre'] != cliente_del]
+                with st.spinner("Eliminando en la nube..."):
+                    ok = github_write_csv(df_filt, csv_sha)
+                if ok:
+                    st.success(f"Cliente {cliente_del} eliminado.")
+                    st.rerun()
+            else:
+                st.error("Marcá la casilla de confirmación antes de eliminar.")
+
+
+# ===================================================
+# TAB 4 — GESTIÓN DE VENDEDORES
+# ===================================================
 with tab_vendedores:
-    st.subheader("⚙️ Configuración y Adición de Vendedores")
-    
+    st.subheader("Configuración de Vendedores")
     col_v1, col_v2 = st.columns([1, 2])
-    
-    # Columna 1: Crear / Añadir un vendedor nuevo
+
     with col_v1:
-        st.markdown("### ➕ Añadir Nuevo Vendedor")
-        nuevo_vendedor_nombre = st.text_input("Nombre del Vendedor").strip().upper()
-        precio_nuevo = st.number_input("Lo que te paga por cliente ($)", min_value=0.0, value=4000.0, step=500.0)
-        
+        st.markdown("### Agregar Nuevo Vendedor")
+        nv_nombre = st.text_input("Nombre del Vendedor").strip().upper()
+        nv_precio = st.number_input("Lo que te paga por cliente ($)", min_value=0.0, value=4000.0, step=500.0)
         if st.button("Registrar Vendedor"):
-            if not nuevo_vendedor_nombre:
-                st.error("Escribe un nombre para el vendedor.")
-            elif nuevo_vendedor_nombre in vendedores_config:
+            if not nv_nombre:
+                st.error("Escribe un nombre.")
+            elif nv_nombre in vendedores_config:
                 st.error("Este vendedor ya existe.")
             else:
-                # Agregar a la estructura de configuración
-                vendedores_config[nuevo_vendedor_nombre] = {
-                    "nombre": nuevo_vendedor_nombre,
-                    "precio_vendedor": precio_nuevo
-                }
-                save_sellers_config(vendedores_config)
-                st.success(f"¡Vendedor '{nuevo_vendedor_nombre}' agregado!")
+                vendedores_config[nv_nombre] = {"nombre": nv_nombre, "precio_vendedor": nv_precio}
+                with st.spinner("Guardando..."):
+                    github_write_json(CONFIG_FILE, vendedores_config, config_sha)
+                st.success(f"Vendedor '{nv_nombre}' agregado!")
                 st.rerun()
-                
-    # Columna 2: Mostrar y Editar Vendedores Existentes
+
     with col_v2:
-        st.markdown("### 📋 Vendedores Registrados y Precios Mayoristas")
-        
-        # Hacemos una copia para guardar los campos modificados
+        st.markdown("### Vendedores Registrados")
         vendedores_editados = {}
-        
         for vend, datos in list(vendedores_config.items()):
-            with st.expander(f"👤 Vendedor: {vend}", expanded=True):
+            with st.expander(f"Vendedor: {vend}", expanded=True):
                 col_e1, col_e2 = st.columns([2, 1])
-                
                 with col_e1:
-                    # Permitir renombrar al vendedor
-                    nombre_editado = st.text_input("Nombre", datos.get("nombre", vend), key=f"nom_{vend}").strip().upper()
+                    nom_ed = st.text_input("Nombre", datos.get("nombre", vend), key=f"nom_{vend}").strip().upper()
                 with col_e2:
-                    precio_editado = st.number_input("Monto que te paga ($)", min_value=0.0, 
-                                                    value=float(datos.get("precio_vendedor", 4000.0 if vend != 'PROPIO' else 10000.0)),
-                                                    key=f"prc_{vend}")
-                
-                # Botón de eliminar vendedor
-                eliminar_vend = st.button(f"🗑️ Quitar {vend}", key=f"del_{vend}")
-                
-                if eliminar_vend:
+                    prc_ed = st.number_input("Monto que te paga ($)", min_value=0.0,
+                                             value=float(datos.get("precio_vendedor", 4000.0)),
+                                             key=f"prc_{vend}")
+                if st.button(f"Quitar {vend}", key=f"del_{vend}"):
                     if len(vendedores_config) <= 1:
-                        st.error("No puedes eliminar todos los vendedores. Debe quedar al menos uno.")
+                        st.error("Debe quedar al menos un vendedor.")
                     else:
-                        # Remover de la configuración
                         del vendedores_config[vend]
-                        save_sellers_config(vendedores_config)
-                        st.success(f"¡Vendedor '{vend}' eliminado!")
+                        with st.spinner("Guardando..."):
+                            github_write_json(CONFIG_FILE, vendedores_config, config_sha)
+                        st.success(f"Vendedor '{vend}' eliminado.")
                         st.rerun()
                 else:
-                    vendedores_editados[nombre_editado] = {
-                        "nombre": nombre_editado,
-                        "precio_vendedor": precio_editado
-                    }
-                    
-        # Botón para guardar todos los cambios de edición
-        if st.button("💾 Guardar Configuración de Vendedores"):
-            save_sellers_config(vendedores_editados)
-            st.success("¡Configuración de vendedores guardada con éxito!")
-            st.rerun()
+                    vendedores_editados[nom_ed] = {"nombre": nom_ed, "precio_vendedor": prc_ed}
 
+        if st.button("Guardar Configuracion de Vendedores"):
+            with st.spinner("Guardando..."):
+                github_write_json(CONFIG_FILE, vendedores_editados, config_sha)
+            st.success("Configuracion guardada!")
+            st.rerun()
