@@ -1,0 +1,22 @@
+{
+    "PROPIO": {
+        "nombre": "PROPIO",
+        "precio_vendedor": 10000.0
+    },
+    "NOE": {
+        "nombre": "NOE",
+        "precio_vendedor": 4000.0
+    },
+    "EUGE": {
+        "nombre": "EUGE",
+        "precio_vendedor": 4000.0
+    },
+    "MICA": {
+        "nombre": "MICA",
+        "precio_vendedor": 4000.0
+    },
+    "ALEXIS": {
+        "nombre": "ALEXIS",
+        "precio_vendedor": 5000.0
+    }
+}
