@@ -1,0 +1,7 @@
+*.csv
+*.xlsx
+*.xls
+__pycache__/
+*.pyc
+.env
+secrets.toml
