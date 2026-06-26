@@ -763,135 +763,15 @@ with tab_whatsapp:
         horizontal=True
     )
 
-    # 2. Envío Masivo en Lotes (Tandas)
+    # 2. Clientes Impagos / Pendientes (Listado Individual)
     st.write("---")
-    st.write("### 🚀 Envío Rápido en Tandas (Lotes)")
-    st.markdown("""
-    Para no abrir 400 pestañas al mismo tiempo (lo cual colgaría tu computadora), podés abrir tandas de a **10 o 20 clientes** en un solo clic.
+    st.write("### 👥 Clientes Pendientes de Pago")
     
-    **Instrucciones para la Secretaria:**
-    1. Elegí cuántos clientes querés abrir en cada tanda.
-    2. Hacé clic en el botón azul **"🚀 Abrir X Chats en Nuevas Pestañas"**.
-    3. *La primera vez, Chrome bloqueará las pestañas emergentes. Hacé clic en el ícono de 'Pop-ups bloqueados' en la barra de direcciones (arriba a la derecha) y seleccioná **'Permitir siempre pop-ups de esta página'**.*
-    4. En cada pestaña que se abre: esperá que cargue el chat del cliente, presioná `Enter` para mandarlo, y cerrala con `Ctrl + W` para pasar a la siguiente.
-    5. Hacé clic en **"👉 Registrar tanda y cargar siguiente"** para avanzar en la lista.
-    """)
-
-    # Inicializar la lista de enviados en sesión si no existe
-    if "enviados" not in st.session_state:
-        st.session_state.enviados = []
-
-    # Obtener todos los pendientes correspondientes al filtro de vendedor
+    # Filtro por vendedor específico para WhatsApp
     lista_vend_wa = ["Todos"] + list(vendedores_config.keys())
-    filtro_vend_wa = st.selectbox("Filtrar por Vendedor para las Tandas", lista_vend_wa, key="wa_filtro_vendedor_tanda")
+    filtro_vend_wa = st.selectbox("Filtrar por Vendedor", lista_vend_wa, key="wa_filtro_vendedor")
     
-    df_pendientes_base = df[df['Pagado'] == False].copy()
-    if filtro_vend_wa != "Todos":
-        df_pendientes_base = df_pendientes_base[df_pendientes_base['Vendedor'] == filtro_vend_wa]
-
-    # Filtrar los que ya se enviaron/abrieron en esta sesión
-    df_pendientes_tanda = df_pendientes_base[~df_pendientes_base['Nombre'].isin(st.session_state.enviados)]
-
-    tanda_col1, tanda_col2 = st.columns([1.5, 1.0])
-    with tanda_col1:
-        tanda_size = st.slider("Tamaño de la tanda:", min_value=5, max_value=30, value=10, step=5)
-    with tanda_col2:
-        st.write("")
-        st.write("")
-        if st.button("🔄 Resetear enviados en esta sesión", use_container_width=True):
-            st.session_state.enviados = []
-            st.rerun()
-
-    st.info(f"Clientes pendientes restantes: **{len(df_pendientes_tanda)}**  (Enviados en esta sesión: {len(st.session_state.enviados)})")
-
-    if not df_pendientes_tanda.empty:
-        proxima_tanda = df_pendientes_tanda.head(tanda_size)
-        lista_nombres_tanda = proxima_tanda['Nombre'].tolist()
-        
-        st.markdown(f"**Clientes en la próxima tanda:** *{', '.join([n.title() for n in lista_nombres_tanda])}*")
-        
-        # Generar las URLs de la tanda
-        import urllib.parse
-        import json
-        urls_tanda = []
-        for _, row in proxima_tanda.iterrows():
-            formatted_phone = format_argentina_phone(row['Telefono'])
-            if not formatted_phone:
-                continue
-            try:
-                mensaje_final = mensaje_template.format(
-                    nombre=row['Nombre'].title(),
-                    mes=row['Mes_Limpio'],
-                    monto=f"{abono_general:,.0f}"
-                )
-            except Exception:
-                mensaje_final = mensaje_template
-            encoded_msg = urllib.parse.quote(mensaje_final)
-            
-            if whatsapp_platform.startswith("WhatsApp Web"):
-                wa_url = f"https://web.whatsapp.com/send?phone={formatted_phone}&text={encoded_msg}"
-            else:
-                wa_url = f"https://wa.me/{formatted_phone}?text={encoded_msg}"
-            urls_tanda.append(wa_url)
-            
-        js_urls = json.dumps(urls_tanda)
-        
-        # Componente HTML con botón para abrir los links
-        js_code = f"""
-        <html>
-        <head>
-            <style>
-                button {{
-                    background: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%);
-                    color: white;
-                    border: none;
-                    padding: 12px 24px;
-                    font-size: 16px;
-                    font-weight: 700;
-                    border-radius: 10px;
-                    cursor: pointer;
-                    width: 100%;
-                    box-shadow: 0 4px 15px rgba(56, 189, 248, 0.4);
-                    transition: all 0.2s ease;
-                }}
-                button:hover {{
-                    transform: translateY(-2px);
-                    box-shadow: 0 6px 20px rgba(56, 189, 248, 0.6);
-                }}
-            </style>
-        </head>
-        <body>
-            <button id="open-btn">🚀 Abrir {len(urls_tanda)} Chats en Nuevas Pestañas</button>
-            <script>
-                document.getElementById('open-btn').addEventListener('click', () => {{
-                    const urls = {js_urls};
-                    urls.forEach(url => {{
-                        window.open(url, '_blank');
-                    }});
-                }});
-            </script>
-        </body>
-        </html>
-        """
-        
-        col_act1, col_act2 = st.columns(2)
-        with col_act1:
-            st.components.v1.html(js_code, height=70)
-        with col_act2:
-            if st.button("👉 Registrar tanda y cargar siguiente", use_container_width=True, type="primary"):
-                st.session_state.enviados.extend(lista_nombres_tanda)
-                st.rerun()
-    else:
-        st.success("🎉 ¡Todos los clientes de esta selección ya fueron abiertos/enviados en esta sesión!")
-
-    # 3. Clientes Impagos / Pendientes (Listado Individual)
-    st.write("---")
-    st.write("### 👥 Listado Individual y Buscador")
-    
-    # Filtro por vendedor específico para WhatsApp listado individual
-    filtro_vend_wa = filtro_vend_wa_tanda = filtro_vend_wa  # Reutilizar el filtro
-    
-    # Obtener lista de clientes pendientes para la lista individual
+    # Obtener lista de clientes pendientes
     df_pendientes = df[df['Pagado'] == False].copy()
     if filtro_vend_wa != "Todos":
         df_pendientes = df_pendientes[df_pendientes['Vendedor'] == filtro_vend_wa]
