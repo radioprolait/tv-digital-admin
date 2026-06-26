@@ -188,6 +188,32 @@ def github_write_json(filename, data, sha, commit_msg="Actualizar configuración
         st.error(f"Error al guardar configuración: {e}")
         return False
 
+def github_read_image(filename="recibo_mes.png"):
+    """Lee una imagen desde GitHub."""
+    try:
+        repo = get_repo()
+        contents = repo.get_contents(filename)
+        raw = base64.b64decode(contents.content)
+        return raw, contents.sha
+    except GithubException as e:
+        if e.status == 404:
+            return None, None
+        return None, None
+
+def github_write_image(filename, image_bytes, sha, commit_msg="Actualizar recibo de pago"):
+    """Guarda una imagen en GitHub."""
+    try:
+        repo = get_repo()
+        if sha:
+            repo.update_file(filename, commit_msg, image_bytes, sha)
+        else:
+            repo.create_file(filename, commit_msg, image_bytes)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al guardar imagen en GitHub: {e}")
+        return False
+
 # ============================================================
 # SISTEMA DE LOGIN
 # ============================================================
@@ -241,6 +267,10 @@ def load_data_cached(_token_hash):
 def load_config_cached(_token_hash):
     return github_read_json(CONFIG_FILE)
 
+@st.cache_data(ttl=60)
+def load_image_cached(_token_hash):
+    return github_read_image()
+
 # ============================================================
 # MAIN APP
 # ============================================================
@@ -262,6 +292,7 @@ token_hash = hash(token)  # Para cache_data (no pasamos el token directo)
 # Cargar datos
 df_raw, csv_sha = load_data_cached(token_hash)
 config_data, config_sha = load_config_cached(token_hash)
+recibo_bytes, recibo_sha = load_image_cached(token_hash)
 
 # ---- CONFIGURACIÓN DE VENDEDORES ----
 def get_default_config(df):
@@ -746,8 +777,8 @@ with tab_whatsapp:
     # 1. Configurar el Mensaje Template
     st.write("### 📝 Mensaje Personalizado")
     
-    # Template por defecto
-    default_template = "Hola *{nombre}*! Te recordamos que tu abono de TV Digital de *{mes}* es de *${monto}*.\n\nPara informar tu pago o realizar consultas, podés responder a este chat. ¡Muchas gracias! 😊"
+    # Template por defecto (con Alias)
+    default_template = "Hola *{nombre}*! Te recordamos que tu abono de TV Digital de *{mes}* es de *${monto}*.\n\n*Alias de transferencia:* onplaymp\n\nPara informar tu pago o realizar consultas, podés responder a este chat. ¡Muchas gracias! 😊"
     
     mensaje_template = st.text_area(
         "Edita el texto del mensaje. Podés usar: {nombre}, {mes}, {monto}",
@@ -764,6 +795,27 @@ with tab_whatsapp:
         index=6,  # JULIO por defecto
         help="Este mes reemplazará la palabra {mes} en el mensaje que le envíes a los clientes."
     )
+    
+    # Subir Recibo del Mes
+    st.write("---")
+    st.write("### 🖼️ Recibo / Imagen del Mes (Opcional)")
+    if recibo_bytes:
+        st.image(recibo_bytes, caption="Recibo cargado para este mes", use_container_width=True)
+        st.info("💡 **Instrucciones para la secretaria:** Hacé clic derecho sobre la imagen de arriba, seleccioná 'Copiar imagen' y pegala con `Ctrl + V` en el chat de WhatsApp Web antes de enviar.")
+    else:
+        st.warning("No hay ningún recibo cargado para este mes.")
+        
+    uploaded_file = st.file_uploader("Subir nueva imagen de recibo:", type=["png", "jpg", "jpeg"])
+    if uploaded_file is not None:
+        new_image_bytes = uploaded_file.read()
+        if st.button("💾 Guardar y actualizar imagen"):
+            with st.spinner("Subiendo imagen..."):
+                ok = github_write_image("recibo_mes.png", new_image_bytes, recibo_sha)
+            if ok:
+                st.success("¡Imagen cargada exitosamente!")
+                st.rerun()
+                
+    st.write("---")
     
     # Opción de plataforma
     whatsapp_platform = st.radio(
