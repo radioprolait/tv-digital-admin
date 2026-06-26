@@ -566,28 +566,62 @@ with tab_clientes:
 
     st.write(f"Mostrando **{len(df_filtrado)}** clientes de **{len(df)}** totales.")
 
-    df_vista = df_filtrado[["Nombre", "Telefono", "Equipo", "Mes", "Vendedor"]].copy()
+    # Inicializar estado para confirmación de eliminación
+    if "confirmar_eliminar" not in st.session_state:
+        st.session_state.confirmar_eliminar = None
 
-    def color_pago(val):
-        if '[P]' in str(val).upper():
-            return 'background-color: #065f46; color: #6ee7b7; font-weight: bold;'
-        return 'background-color: #7c2d12; color: #fdba74; font-weight: bold;'
+    # Encabezados de la tabla
+    col_h1, col_h2, col_h3, col_h4, col_h5, col_h6 = st.columns([2.5, 1.5, 1.2, 1.5, 1.5, 0.6])
+    with col_h1: st.markdown("**Nombre**")
+    with col_h2: st.markdown("**Teléfono**")
+    with col_h3: st.markdown("**Equipo**")
+    with col_h4: st.markdown("**Mes**")
+    with col_h5: st.markdown("**Vendedor**")
+    with col_h6: st.markdown("**Baja**")
+    st.divider()
 
-    try:
-        styled = df_vista.style.map(color_pago, subset=['Mes'])
-    except Exception:
-        styled = df_vista.style.applymap(color_pago, subset=['Mes'])
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    for row_idx, row in df_filtrado.iterrows():
+        col_r1, col_r2, col_r3, col_r4, col_r5, col_r6 = st.columns([2.5, 1.5, 1.2, 1.5, 1.5, 0.6])
+        mes_val = str(row['Mes'])
+        es_pagado = '[P]' in mes_val.upper()
+        mes_color = "color:#6ee7b7;font-weight:600;" if es_pagado else "color:#fdba74;font-weight:600;"
+        with col_r1: st.write(row['Nombre'])
+        with col_r2: st.write(str(row['Telefono']) if str(row['Telefono']) not in ['nan', ''] else '—')
+        with col_r3: st.write(row['Equipo'])
+        with col_r4: st.markdown(f"<span style='{mes_color}'>{mes_val}</span>", unsafe_allow_html=True)
+        with col_r5: st.write(row['Vendedor'])
+        with col_r6:
+            if st.button("🗑️", key=f"del_btn_{row_idx}", help=f"Eliminar a {row['Nombre']}"):
+                st.session_state.confirmar_eliminar = row['Nombre']
+                st.rerun()
+
+    # Diálogo de confirmación de eliminación
+    if st.session_state.confirmar_eliminar:
+        nombre_a_eliminar = st.session_state.confirmar_eliminar
+        st.error(f"⚠️ ¿Estás seguro que deseás eliminar a **{nombre_a_eliminar}**? Esta acción no se puede deshacer.")
+        col_si, col_no, _ = st.columns([1, 1, 4])
+        with col_si:
+            if st.button("✅ Sí, eliminar", type="primary", use_container_width=True):
+                df_filt = df_raw[df_raw['Nombre'] != nombre_a_eliminar]
+                with st.spinner("Eliminando en la nube..."):
+                    ok = github_write_csv(df_filt, csv_sha)
+                if ok:
+                    st.session_state.confirmar_eliminar = None
+                    st.success(f"Cliente {nombre_a_eliminar} eliminado.")
+                    st.rerun()
+        with col_no:
+            if st.button("❌ Cancelar", use_container_width=True):
+                st.session_state.confirmar_eliminar = None
+                st.rerun()
 
 
 # ===================================================
 # TAB 3 — REGISTRAR PAGOS / CRUD
 # ===================================================
 with tab_pagos:
-    subtab_mod, subtab_crear, subtab_del = st.tabs([
+    subtab_mod, subtab_crear = st.tabs([
         "💳 Modificar / Registrar Pago",
-        "➕ Agregar Nuevo Cliente",
-        "❌ Eliminar Cliente"
+        "➕ Agregar Nuevo Cliente"
     ])
 
     # --- MODIFICAR ---
@@ -662,23 +696,6 @@ with tab_pagos:
                     st.success(f"Cliente {c_nombre2.upper()} agregado!")
                     st.rerun()
 
-    # --- ELIMINAR ---
-    with subtab_del:
-        st.subheader("Eliminar un Cliente")
-        cliente_del = st.selectbox("Cliente a dar de baja", sorted(df['Nombre'].tolist()), key="del_sel")
-        st.warning(f"Atencion: Estas por eliminar permanentemente a **{cliente_del}**.")
-        confirmar   = st.checkbox("Confirmo que deseo borrar este registro de forma permanente.")
-
-        if st.button("Eliminar Registro"):
-            if confirmar:
-                df_filt = df_raw[df_raw['Nombre'] != cliente_del]
-                with st.spinner("Eliminando en la nube..."):
-                    ok = github_write_csv(df_filt, csv_sha)
-                if ok:
-                    st.success(f"Cliente {cliente_del} eliminado.")
-                    st.rerun()
-            else:
-                st.error("Marcá la casilla de confirmación antes de eliminar.")
 
 
 # ===================================================
