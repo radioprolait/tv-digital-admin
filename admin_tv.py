@@ -776,17 +776,8 @@ def format_argentina_phone(phone):
 # TAB 5 — AVISOS WHATSAPP (GRATIS)
 # ===================================================
 with tab_whatsapp:
-    st.subheader("📨 Envío de Avisos por WhatsApp Web (100% Gratis)")
-    st.markdown("""
-    Esta herramienta te permite generar y enviar avisos de cobro de manera personalizada usando **WhatsApp Web** en tu navegador.
-    
-    - **100% Gratis:** Sin APIs pagas ni intermediarios.
-    - **Seguro y Directo:** La secretaria hace clic en enviar y se abre el chat directo del cliente en WhatsApp Web con el mensaje ya escrito.
-    - **Sin límites:** Mandá todos los avisos que quieras sin riesgo de bloqueos.
-    """)
-
     # 1. Configurar el Mensaje Template
-    st.write("### 📝 Mensaje Personalizado")
+    st.subheader("📝 Configurar Mensaje de Cobro")
     
     # Template por defecto (con Alias)
     default_template = "Hola *{nombre}*! Te recordamos que tu abono de TV Digital de *{mes}* es de *${monto}*.\n\n*Alias de transferencia:* onplaymp\n\nPara informar tu pago o realizar consultas, podés responder a este chat. ¡Muchas gracias! 😊"
