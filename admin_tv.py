@@ -756,6 +756,15 @@ with tab_whatsapp:
         help="Las palabras entre llaves {} se reemplazarán automáticamente por los datos de cada cliente."
     )
     
+    # Selector de mes para el mensaje
+    meses_lista = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
+    mes_aviso = st.selectbox(
+        "📅 Mes a incluir en el aviso de cobro:",
+        meses_lista,
+        index=6,  # JULIO por defecto
+        help="Este mes reemplazará la palabra {mes} en el mensaje que le envíes a los clientes."
+    )
+    
     # Opción de plataforma
     whatsapp_platform = st.radio(
         "Abrir WhatsApp en:",
@@ -819,7 +828,7 @@ with tab_whatsapp:
             try:
                 mensaje_final = mensaje_template.format(
                     nombre=c_name.title(),
-                    mes=c_mes_limpio,
+                    mes=mes_aviso.title(),
                     monto=f"{abono_general:,.0f}"
                 )
             except Exception as e:
