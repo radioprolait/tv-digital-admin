@@ -289,7 +289,7 @@ vendedores_config = config_data
 st.sidebar.title("⚙️ Configuración")
 abono_general = st.sidebar.number_input(
     "Valor del Abono ($)",
-    min_value=0, value=5000, step=500,
+    min_value=0, value=12000, step=500,
     help="Precio mensual cobrado a cada cliente."
 )
 st.sidebar.divider()
@@ -402,6 +402,52 @@ with tab_dashboard:
                     ok = github_write_csv(df_nuevo, csv_sha)
                 if ok:
                     st.success(f"Cliente {c_nombre.upper()} agregado!")
+                    st.rerun()
+
+    st.divider()
+
+    # Cierre de Mes
+    with st.expander("🗓️  CIERRE DE MES — Resetear y arrancar mes nuevo", expanded=False):
+        st.markdown("""
+        **¿Qué hace el cierre de mes?**
+        - Quita el estado PAGADO de **todos** los clientes (vuelven a pendiente)
+        - Cambia el mes de facturación al mes nuevo que elijas
+        - Los datos del mes anterior quedan en cero, listos para arrancar
+        """)
+        st.warning("Esta acción modifica TODOS los clientes. No se puede deshacer.")
+
+        col_cm1, col_cm2 = st.columns(2)
+        with col_cm1:
+            mes_nuevo = st.selectbox(
+                "Mes nuevo a asignar a todos los clientes",
+                ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
+                 "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"],
+                index=6,  # JULIO por defecto
+                key="cierre_mes"
+            )
+        with col_cm2:
+            st.write("")
+            st.write("")
+            pagados_actuales = len(df[df['Pagado'] == True])
+            st.info(f"Clientes pagados que se van a resetear: **{pagados_actuales}**")
+
+        confirmar_cierre = st.checkbox(
+            f"Confirmo el cierre de mes. Todos los clientes pasarán a PENDIENTE en {mes_nuevo}.",
+            key="confirmar_cierre"
+        )
+
+        if st.button("🗓️ EJECUTAR CIERRE DE MES", key="btn_cierre"):
+            if not confirmar_cierre:
+                st.error("Marcá la casilla de confirmación para continuar.")
+            else:
+                # Resetear: quitar [P] y actualizar mes en todos los clientes
+                df_cierre = df_raw.copy()
+                df_cierre['Mes'] = mes_nuevo  # Todos pasan al mes nuevo, sin [P]
+                with st.spinner(f"Ejecutando cierre de mes... asignando {mes_nuevo} a todos los clientes."):
+                    ok = github_write_csv(df_cierre, csv_sha)
+                if ok:
+                    st.success(f"Cierre de mes ejecutado! Todos los clientes ahora figuran en {mes_nuevo} como PENDIENTES. Listo para arrancar!")
+                    st.balloons()
                     st.rerun()
 
     st.divider()
