@@ -214,6 +214,17 @@ def github_write_image(filename, image_bytes, sha, commit_msg="Actualizar recibo
         st.error(f"Error al guardar imagen en GitHub: {e}")
         return False
 
+def github_delete_file(filename, sha, commit_msg="Eliminar archivo"):
+    """Elimina un archivo de GitHub."""
+    try:
+        repo = get_repo()
+        repo.delete_file(filename, commit_msg, sha)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Error al eliminar archivo en GitHub: {e}")
+        return False
+
 # ============================================================
 # SISTEMA DE LOGIN
 # ============================================================
@@ -799,9 +810,20 @@ with tab_whatsapp:
     # Subir Recibo del Mes
     st.write("---")
     st.write("### 🖼️ Recibo / Imagen del Mes (Opcional)")
+    
+    adjuntar_link = False
     if recibo_bytes:
         st.image(recibo_bytes, caption="Recibo cargado para este mes", use_container_width=True)
-        st.info("💡 **Instrucciones para la secretaria:** Hacé clic derecho sobre la imagen de arriba, seleccioná 'Copiar imagen' y pegala con `Ctrl + V` en el chat de WhatsApp Web antes de enviar.")
+        adjuntar_link = st.checkbox("🔗 Adjuntar automáticamente el link del recibo al mensaje (Muestra vista previa de la imagen en celulares y PC)", value=True)
+        
+        col_img1, col_img2 = st.columns([2, 1])
+        with col_img2:
+            if st.button("🗑️ Eliminar recibo actual", use_container_width=True, type="secondary"):
+                with st.spinner("Eliminando recibo..."):
+                    ok = github_delete_file("recibo_mes.png", recibo_sha, "Eliminar recibo del mes")
+                if ok:
+                    st.success("Recibo eliminado!")
+                    st.rerun()
     else:
         st.warning("No hay ningún recibo cargado para este mes.")
         
@@ -885,6 +907,9 @@ with tab_whatsapp:
                 )
             except Exception as e:
                 mensaje_final = mensaje_template  # fallback
+                
+            if adjuntar_link:
+                mensaje_final += "\n\nVer recibo: https://raw.githubusercontent.com/radioprolait/tv-digital-admin/main/recibo_mes.png"
                 
             encoded_msg = urllib.parse.quote(mensaje_final)
             
