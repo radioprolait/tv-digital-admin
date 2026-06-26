@@ -321,11 +321,12 @@ df['Comision_Valor']  = df['Monto_Facturado'] - df['Precio_Vendedor']
 df['Ganancia_Valor']  = df['Precio_Vendedor']
 
 # ---- TABS ----
-tab_dashboard, tab_clientes, tab_pagos, tab_vendedores = st.tabs([
+tab_dashboard, tab_clientes, tab_pagos, tab_vendedores, tab_whatsapp = st.tabs([
     "📊 Tablero General",
     "👥 Clientes y Filtros",
     "💰 Registrar Pagos / CRUD",
-    "⚙️ Gestión de Vendedores"
+    "⚙️ Gestión de Vendedores",
+    "📨 Avisos WhatsApp"
 ])
 
 # ===================================================
@@ -690,3 +691,171 @@ with tab_vendedores:
                 github_write_json(CONFIG_FILE, vendedores_editados, config_sha)
             st.success("Configuracion guardada!")
             st.rerun()
+
+# ============================================================
+# HELPER: FORMATTEAR TELÉFONO DE ARGENTINA PARA WHATSAPP
+# ============================================================
+def format_argentina_phone(phone):
+    """
+    Formatea números de teléfono al estándar E.164 para WhatsApp en Argentina.
+    Formato esperado: 54 + 9 + código de área (sin 0) + número local (sin 15).
+    """
+    if not phone or pd.isna(phone):
+        return None
+    
+    # Conservar solo dígitos
+    clean = "".join(filter(str.isdigit, str(phone)))
+    
+    if not clean:
+        return None
+        
+    # Si ya empieza con 54, asegurarse del 9 si tiene largo de celular estándar
+    if clean.startswith("54"):
+        if len(clean) == 12 and not clean.startswith("549"):
+            # Insertar 9 después de 54
+            clean = "549" + clean[2:]
+        return clean
+        
+    # Si tiene 10 dígitos (ej: 2281302299 o 2983569326)
+    if len(clean) == 10:
+        return "549" + clean
+        
+    # Si empieza con 9 y tiene 11 dígitos (ej: 92281302299)
+    if len(clean) == 11 and clean.startswith("9"):
+        return "54" + clean
+        
+    # Si tiene menos de 10 dígitos, probablemente esté incompleto o local sin código de área
+    if len(clean) < 10:
+        return None
+        
+    return "549" + clean
+
+# ===================================================
+# TAB 5 — AVISOS WHATSAPP (GRATIS)
+# ===================================================
+with tab_whatsapp:
+    st.subheader("📨 Envío de Avisos por WhatsApp Web (100% Gratis)")
+    st.markdown("""
+    Esta herramienta te permite generar y enviar avisos de cobro de manera personalizada usando **WhatsApp Web** en tu navegador.
+    
+    - **100% Gratis:** Sin APIs pagas ni intermediarios.
+    - **Seguro y Directo:** La secretaria hace clic en enviar y se abre el chat directo del cliente en WhatsApp Web con el mensaje ya escrito.
+    - **Sin límites:** Mandá todos los avisos que quieras sin riesgo de bloqueos.
+    """)
+
+    # 1. Configurar el Mensaje Template
+    st.write("### 📝 Mensaje Personalizado")
+    
+    # Template por defecto
+    default_template = "Hola *{nombre}*! Te recordamos que tu abono de TV Digital de *{mes}* es de *${monto}*.\n\nPara informar tu pago o realizar consultas, podés responder a este chat. ¡Muchas gracias! 😊"
+    
+    mensaje_template = st.text_area(
+        "Edita el texto del mensaje. Podés usar: {nombre}, {mes}, {monto}",
+        value=default_template,
+        height=150,
+        help="Las palabras entre llaves {} se reemplazarán automáticamente por los datos de cada cliente."
+    )
+    
+    # Opción de plataforma
+    whatsapp_platform = st.radio(
+        "Abrir WhatsApp en:",
+        ["WhatsApp Web (Recomendado para PC / Google Chrome)", "WhatsApp App / Celular (wa.me)"],
+        horizontal=True
+    )
+    
+    # 2. Clientes Impagos / Pendientes
+    st.write("---")
+    st.write("### 👥 Clientes Pendientes de Pago")
+    
+    # Filtro por vendedor específico para WhatsApp
+    lista_vend_wa = ["Todos"] + list(vendedores_config.keys())
+    filtro_vend_wa = st.selectbox("Filtrar pendientes por Vendedor", lista_vend_wa, key="wa_filtro_vendedor")
+    
+    # Obtener lista de clientes pendientes
+    df_pendientes = df[df['Pagado'] == False].copy()
+    if filtro_vend_wa != "Todos":
+        df_pendientes = df_pendientes[df_pendientes['Vendedor'] == filtro_vend_wa]
+        
+    if df_pendientes.empty:
+        st.success("¡Buenísimo! No hay clientes pendientes con los filtros seleccionados.")
+    else:
+        st.write(f"Hay **{len(df_pendientes)}** clientes pendientes.")
+        
+        # Buscador de cliente pendiente
+        busqueda_wa = st.text_input("Buscar cliente pendiente por nombre o teléfono", key="wa_busqueda")
+        if busqueda_wa:
+            df_pendientes = df_pendientes[
+                df_pendientes['Nombre'].str.contains(busqueda_wa, case=False, na=False) |
+                df_pendientes['Telefono'].str.contains(busqueda_wa, case=False, na=False)
+            ]
+            
+        # Tabla interactiva
+        # Encabezados
+        col_name, col_tel, col_vend, col_actions = st.columns([2.5, 1.5, 1.5, 2.5])
+        with col_name:
+            st.markdown("**Cliente**")
+        with col_tel:
+            st.markdown("**Teléfono**")
+        with col_vend:
+            st.markdown("**Vendedor**")
+        with col_actions:
+            st.markdown("**Acciones**")
+            
+        st.divider()
+        
+        import urllib.parse
+        
+        for idx, row in df_pendientes.iterrows():
+            c_name = row['Nombre']
+            c_tel = row['Telefono']
+            c_vend = row['Vendedor']
+            c_mes_limpio = row['Mes_Limpio']
+            
+            # Formatear teléfono
+            formatted_phone = format_argentina_phone(c_tel)
+            
+            # Formatear mensaje
+            # Reemplazar placeholders en el template
+            try:
+                mensaje_final = mensaje_template.format(
+                    nombre=c_name.title(),
+                    mes=c_mes_limpio,
+                    monto=f"{abono_general:,.0f}"
+                )
+            except Exception as e:
+                mensaje_final = mensaje_template  # fallback
+                
+            encoded_msg = urllib.parse.quote(mensaje_final)
+            
+            # Generar URL
+            if whatsapp_platform.startswith("WhatsApp Web"):
+                wa_url = f"https://web.whatsapp.com/send?phone={formatted_phone}&text={encoded_msg}"
+            else:
+                wa_url = f"https://wa.me/{formatted_phone}?text={encoded_msg}"
+                
+            col_r_name, col_r_tel, col_r_vend, col_r_actions = st.columns([2.5, 1.5, 1.5, 2.5])
+            
+            with col_r_name:
+                st.write(c_name)
+            with col_r_tel:
+                st.write(c_tel if (c_tel and str(c_tel).strip() and str(c_tel) != 'nan') else "⚠️ Sin Tel")
+            with col_r_vend:
+                st.write(c_vend)
+            with col_r_actions:
+                col_btn_send, col_btn_pay = st.columns([1.2, 1.0])
+                with col_btn_send:
+                    if formatted_phone:
+                        st.link_button("✉️ Enviar", wa_url, use_container_width=True)
+                    else:
+                        st.button("❌ Sin Tel", disabled=True, use_container_width=True, key=f"disabled_wa_{idx}")
+                with col_btn_pay:
+                    # Botón para marcar como pagado directamente
+                    if st.button("✅ Pago", key=f"pay_wa_{idx}", use_container_width=True, help="Marcar como pagado sin salir"):
+                        # Encontrar en df_raw original y marcar pagado
+                        raw_idx = df_raw[df_raw['Nombre'] == c_name].index[0]
+                        df_raw.at[raw_idx, 'Mes'] = f"{row['Mes']} [P]"
+                        with st.spinner("Registrando pago..."):
+                            ok = github_write_csv(df_raw, csv_sha)
+                        if ok:
+                            st.success(f"{c_name} marcado como PAGADO!")
+                            st.rerun()
