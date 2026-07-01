@@ -393,10 +393,18 @@ with tab_dashboard:
             <div class="metric-subtitle">Pagados: {total_pagos} | Pendientes: {total_impagos}</div>
         </div>""", unsafe_allow_html=True)
     with col2:
+        # Desglose por vendedor de los pagos cobrados
+        df_pagados = df[df['Pagado'] == True]
+        desglose_parts = []
+        for vend in df_pagados['Vendedor'].unique():
+            cantidad = len(df_pagados[df_pagados['Vendedor'] == vend])
+            subtotal = df_pagados[df_pagados['Vendedor'] == vend]['Precio_Vendedor'].sum()
+            desglose_parts.append(f"{cantidad} {vend}: ${subtotal:,.0f}")
+        desglose_txt = " | ".join(desglose_parts) if desglose_parts else "Sin pagos aún"
         st.markdown(f"""<div class="metric-card">
             <div class="metric-title">Tu Plata Cobrada (Neto)</div>
             <div class="metric-value green">${plata_cobrada_neta:,.0f}</div>
-            <div class="metric-subtitle">Bruto clientes: ${recaudacion_bruta:,.0f}</div>
+            <div class="metric-subtitle">{desglose_txt}</div>
         </div>""", unsafe_allow_html=True)
     with col3:
         st.markdown(f"""<div class="metric-card">
