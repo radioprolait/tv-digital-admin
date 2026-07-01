@@ -4,6 +4,7 @@ import json
 import os
 import io
 import base64
+from datetime import datetime, timedelta
 from github import Github, Auth, GithubException
 try:
     import extra_streamlit_components as stx
@@ -264,7 +265,8 @@ def show_login(cookie_ctrl):
                     st.session_state.logged_in  = True
                     st.session_state.username   = usuario
                     if recordar and cookie_ctrl:
-                        cookie_ctrl.set("tv_digital_user", usuario)
+                        expira = datetime.now() + timedelta(days=30)
+                        cookie_ctrl.set("tv_digital_user", usuario, expires_at=expira)
                     st.rerun()
                 else:
                     st.error("Usuario o contraseña incorrectos.")
