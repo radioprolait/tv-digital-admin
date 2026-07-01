@@ -4,13 +4,7 @@ import json
 import os
 import io
 import base64
-from datetime import datetime, timedelta
 from github import Github, Auth, GithubException
-try:
-    import extra_streamlit_components as stx
-    _cookies_available = True
-except ImportError:
-    _cookies_available = False
 
 # ============================================================
 # CONFIGURACIÓN DE PÁGINA
@@ -243,7 +237,7 @@ def get_users():
     except Exception:
         return {"admin": "tv2024"}
 
-def show_login(cookie_ctrl):
+def show_login():
     col1, col2, col3 = st.columns([1, 1.2, 1])
     with col2:
         st.markdown("""
@@ -255,30 +249,27 @@ def show_login(cookie_ctrl):
         """, unsafe_allow_html=True)
         st.write("")
         with st.form("login_form"):
-            usuario = st.text_input("👤 Usuario", placeholder="Ingresá tu usuario")
+            usuario  = st.text_input("👤 Usuario", placeholder="Ingresá tu usuario")
             password = st.text_input("🔒 Contraseña", type="password", placeholder="Ingresá tu contraseña")
             recordar = st.checkbox("🔑 Recordarme en este dispositivo", value=True)
             submitted = st.form_submit_button("Ingresar al Sistema →", use_container_width=True)
             if submitted:
                 users = get_users()
                 if usuario in users and users[usuario] == password:
-                    st.session_state.logged_in  = True
-                    st.session_state.username   = usuario
-                    if recordar and cookie_ctrl:
-                        expira = datetime.now() + timedelta(days=30)
-                        cookie_ctrl.set("tv_digital_user", usuario, expires_at=expira)
+                    st.session_state.logged_in = True
+                    st.session_state.username  = usuario
+                    if recordar:
+                        st.query_params["_u"] = usuario
+                    else:
+                        st.query_params.clear()
                     st.rerun()
                 else:
                     st.error("Usuario o contraseña incorrectos.")
 
-def logout(cookie_ctrl):
+def logout():
     st.session_state.logged_in = False
     st.session_state.username  = ""
-    if cookie_ctrl:
-        try:
-            cookie_ctrl.set("tv_digital_user", "")  # limpiar cookie
-        except Exception:
-            pass
+    st.query_params.clear()
     st.rerun()
 
 # ============================================================
@@ -301,32 +292,23 @@ def load_image_cached(_token_hash):
 # MAIN APP
 # ============================================================
 
-# Inicializar cookie manager
-if _cookies_available:
-    cookie_ctrl = stx.CookieManager(key="tv_cookie_mgr")
-else:
-    cookie_ctrl = None
-
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "username" not in st.session_state:
     st.session_state.username = ""
 
-# Intentar restaurar sesión desde cookie
-if not st.session_state.logged_in and cookie_ctrl:
-    try:
-        saved_user = cookie_ctrl.get("tv_digital_user")
-        if saved_user and str(saved_user).strip():
-            users = get_users()
-            if saved_user in users:
-                st.session_state.logged_in = True
-                st.session_state.username  = saved_user
-    except Exception:
-        pass
+# Restaurar sesión desde query params (login persistente)
+if not st.session_state.logged_in:
+    saved_user = st.query_params.get("_u", "")
+    if saved_user:
+        users = get_users()
+        if saved_user in users:
+            st.session_state.logged_in = True
+            st.session_state.username  = saved_user
 
 # Mostrar login si no está autenticado
 if not st.session_state.logged_in:
-    show_login(cookie_ctrl)
+    show_login()
     st.stop()
 
 # ---- USUARIO AUTENTICADO ----
@@ -370,7 +352,7 @@ abono_general = st.sidebar.number_input(
 st.sidebar.divider()
 st.sidebar.write(f"👤 Sesión: **{st.session_state.username}**")
 if st.sidebar.button("🚩 Cerrar Sesión"):
-    logout(cookie_ctrl)
+    logout()
 
 # ---- TÍTULO ----
 st.title("📺 Panel de Control — TV Digital")
