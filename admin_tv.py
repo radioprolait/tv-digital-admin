@@ -444,10 +444,19 @@ with tab_dashboard:
             <div class="metric-subtitle">De {total_impagos} clientes impagos</div>
         </div>""", unsafe_allow_html=True)
     with col4:
+        # Desglose de comisiones por vendedor (excluir PROPIO que no tiene comisión)
+        comis_parts = []
+        for vend in df_pagados['Vendedor'].unique():
+            if vend.upper() == 'PROPIO':
+                continue
+            comis_vend = df_pagados[df_pagados['Vendedor'] == vend]['Comision_Valor'].sum()
+            if comis_vend > 0:
+                comis_parts.append(f"{vend}: ${comis_vend:,.0f}")
+        comis_txt = " | ".join(comis_parts) if comis_parts else "Sin comisiones aún"
         st.markdown(f"""<div class="metric-card">
             <div class="metric-title">Comisiones Vendedores</div>
             <div class="metric-value purple">${comisiones_pagos:,.0f}</div>
-            <div class="metric-subtitle">Retenido por vendedores</div>
+            <div class="metric-subtitle">{comis_txt}</div>
         </div>""", unsafe_allow_html=True)
 
     st.divider()
