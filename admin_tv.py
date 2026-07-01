@@ -6,7 +6,7 @@ import io
 import base64
 from github import Github, Auth, GithubException
 try:
-    from streamlit_cookies_controller import CookieController
+    import extra_streamlit_components as stx
     _cookies_available = True
 except ImportError:
     _cookies_available = False
@@ -274,7 +274,7 @@ def logout(cookie_ctrl):
     st.session_state.username  = ""
     if cookie_ctrl:
         try:
-            cookie_ctrl.remove("tv_digital_user")
+            cookie_ctrl.set("tv_digital_user", "")  # limpiar cookie
         except Exception:
             pass
     st.rerun()
@@ -300,7 +300,13 @@ def load_image_cached(_token_hash):
 # ============================================================
 
 # Inicializar cookie manager
-cookie_ctrl = CookieController() if _cookies_available else None
+@st.cache_resource
+def get_cookie_manager():
+    if _cookies_available:
+        return stx.CookieManager()
+    return None
+
+cookie_ctrl = get_cookie_manager()
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -311,7 +317,7 @@ if "username" not in st.session_state:
 if not st.session_state.logged_in and cookie_ctrl:
     try:
         saved_user = cookie_ctrl.get("tv_digital_user")
-        if saved_user:
+        if saved_user and str(saved_user).strip():
             users = get_users()
             if saved_user in users:
                 st.session_state.logged_in = True
