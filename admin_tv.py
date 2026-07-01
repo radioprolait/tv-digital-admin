@@ -188,17 +188,20 @@ def github_write_json(filename, data, sha, commit_msg="Actualizar configuración
         st.error(f"Error al guardar configuración: {e}")
         return False
 
+RECIBO_RAW_URL = "https://raw.githubusercontent.com/radioprolait/tv-digital-admin/main/recibo_mes.png"
+
 def github_read_image(filename="recibo_mes.png"):
-    """Lee una imagen desde GitHub."""
+    """Verifica si existe la imagen en GitHub y devuelve su SHA (sin descargar contenido)."""
     try:
         repo = get_repo()
         contents = repo.get_contents(filename)
-        raw = base64.b64decode(contents.content)
-        return raw, contents.sha
+        return contents.sha
     except GithubException as e:
         if e.status == 404:
-            return None, None
-        return None, None
+            return None
+        return None
+    except Exception:
+        return None
 
 def github_write_image(filename, image_bytes, sha, commit_msg="Actualizar recibo de pago"):
     """Guarda una imagen en GitHub."""
@@ -318,7 +321,7 @@ token_hash = hash(token)  # Para cache_data (no pasamos el token directo)
 # Cargar datos
 df_raw, csv_sha = load_data_cached(token_hash)
 config_data, config_sha = load_config_cached(token_hash)
-recibo_bytes, recibo_sha = load_image_cached(token_hash)
+recibo_sha = load_image_cached(token_hash)
 
 # ---- CONFIGURACIÓN DE VENDEDORES ----
 def get_default_config(df):
@@ -852,10 +855,10 @@ with tab_whatsapp:
     st.write("### 🖼️ Recibo / Imagen del Mes (Opcional)")
     
     adjuntar_link = False
-    if recibo_bytes:
-        st.image(recibo_bytes, caption="Recibo cargado para este mes", use_container_width=True)
-        adjuntar_link = st.checkbox("🔗 Adjuntar automáticamente el link del recibo al mensaje (Muestra vista previa de la imagen en celulares y PC)", value=True)
-        
+    if recibo_sha:
+        import time as _time
+        st.image(f"{RECIBO_RAW_URL}?v={recibo_sha[:8]}", caption="Recibo cargado para este mes", use_container_width=True)
+        adjuntar_link = st.checkbox("🔗 Adjuntar link del recibo al mensaje", value=True)
         col_img1, col_img2 = st.columns([2, 1])
         with col_img2:
             if st.button("🗑️ Eliminar recibo actual", use_container_width=True, type="secondary"):
@@ -866,16 +869,22 @@ with tab_whatsapp:
                     st.rerun()
     else:
         st.warning("No hay ningún recibo cargado para este mes.")
-        
+
     uploaded_file = st.file_uploader("Subir nueva imagen de recibo:", type=["png", "jpg", "jpeg"])
     if uploaded_file is not None:
-        new_image_bytes = uploaded_file.read()
-        if st.button("💾 Guardar y actualizar imagen"):
-            with st.spinner("Subiendo imagen..."):
-                ok = github_write_image("recibo_mes.png", new_image_bytes, recibo_sha)
-            if ok:
-                st.success("¡Imagen cargada exitosamente!")
-                st.rerun()
+        size_mb = uploaded_file.size / (1024 * 1024)
+        if size_mb > 10:
+            st.error(f"La imagen pesa {size_mb:.1f}MB. El máximo es 10MB. Comprimila antes de subir.")
+        else:
+            if size_mb > 3:
+                st.warning(f"La imagen pesa {size_mb:.1f}MB. Recomendamos imágenes menores a 3MB para mejor rendimiento.")
+            new_image_bytes = uploaded_file.read()
+            if st.button("💾 Guardar y actualizar imagen"):
+                with st.spinner("Subiendo imagen..."):
+                    ok = github_write_image("recibo_mes.png", new_image_bytes, recibo_sha)
+                if ok:
+                    st.success("¡Imagen cargada exitosamente!")
+                    st.rerun()
                 
     st.write("---")
     
@@ -949,7 +958,7 @@ with tab_whatsapp:
                 mensaje_final = mensaje_template  # fallback
                 
             if adjuntar_link:
-                mensaje_final += "\n\nVer recibo: https://raw.githubusercontent.com/radioprolait/tv-digital-admin/main/recibo_mes.png"
+                mensaje_final += f"\n\n\U0001f9fe Tu recibo de {mes_aviso.title()}: {RECIBO_RAW_URL}"
                 
             encoded_msg = urllib.parse.quote(mensaje_final)
             
