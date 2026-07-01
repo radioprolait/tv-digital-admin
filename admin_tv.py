@@ -300,13 +300,10 @@ def load_image_cached(_token_hash):
 # ============================================================
 
 # Inicializar cookie manager
-@st.cache_resource
-def get_cookie_manager():
-    if _cookies_available:
-        return stx.CookieManager()
-    return None
-
-cookie_ctrl = get_cookie_manager()
+if _cookies_available:
+    cookie_ctrl = stx.CookieManager(key="tv_cookie_mgr")
+else:
+    cookie_ctrl = None
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
