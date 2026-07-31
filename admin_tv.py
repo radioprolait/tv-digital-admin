@@ -142,10 +142,10 @@ def github_read_csv():
     except GithubException as e:
         if e.status == 404:
             # El archivo no existe aún, devolvemos vacío
-            empty = pd.DataFrame(columns=["Nombre", "Telefono", "Equipo", "Mes", "Vendedor"])
+            empty = pd.DataFrame(columns=["Nombre", "Telefono", "Apps", "Mes", "Vendedor"])
             return empty, None
         st.error(f"Error GitHub al leer datos: {e}")
-        return pd.DataFrame(columns=["Nombre", "Telefono", "Equipo", "Mes", "Vendedor"]), None
+        return pd.DataFrame(columns=["Nombre", "Telefono", "Apps", "Mes", "Vendedor"]), None
 
 def github_write_csv(df, sha):
     """Guarda el DataFrame como CSV en GitHub."""
@@ -456,7 +456,7 @@ with tab_dashboard:
             c_tel      = st.text_input("Teléfono", key="qc_tel")
             c_vendedor = st.selectbox("Vendedor Asignado", list(vendedores_config.keys()), key="qc_vendedor")
         with col_c2:
-            c_equipo   = st.selectbox("Equipo", ["ANDROID", "Sin Asignar"], key="qc_equipo")
+            c_equipo   = st.selectbox("Apps", ["ON PLAY", "MULTI GEMA"], key="qc_equipo")
             c_mes      = st.selectbox("Mes de Facturación",
                 ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
                  "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"],
@@ -471,7 +471,7 @@ with tab_dashboard:
                 nueva_fila = {
                     "Nombre": c_nombre.strip().upper(),
                     "Telefono": c_tel.strip(),
-                    "Equipo": c_equipo,
+                    "Apps": c_equipo,
                     "Mes": mes_sal,
                     "Vendedor": c_vendedor
                 }
@@ -581,8 +581,8 @@ with tab_clientes:
     with col_f3:
         filtro_estado = st.selectbox("Estado de Pago", ["Todos", "Pagados", "Pendientes"])
     with col_f4:
-        equipos = ["Todos"] + [eq for eq in df['Equipo'].unique() if eq]
-        filtro_equipo = st.selectbox("Filtrar por Equipo", equipos)
+        apps_opts = ["Todos"] + [a for a in df['Apps'].unique() if a]
+        filtro_equipo = st.selectbox("Filtrar por App", apps_opts)
 
     df_filtrado = df.copy()
     if busqueda:
@@ -597,7 +597,7 @@ with tab_clientes:
     elif filtro_estado == "Pendientes":
         df_filtrado = df_filtrado[df_filtrado['Pagado'] == False]
     if filtro_equipo != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Equipo'] == filtro_equipo]
+        df_filtrado = df_filtrado[df_filtrado['Apps'] == filtro_equipo]
 
     st.write(f"Mostrando **{len(df_filtrado)}** clientes de **{len(df)}** totales.")
 
@@ -609,7 +609,7 @@ with tab_clientes:
     col_h1, col_h2, col_h3, col_h4, col_h5, col_h6 = st.columns([2.5, 1.5, 1.2, 1.5, 1.5, 0.6])
     with col_h1: st.markdown("**Nombre**")
     with col_h2: st.markdown("**Teléfono**")
-    with col_h3: st.markdown("**Equipo**")
+    with col_h3: st.markdown("**App**")
     with col_h4: st.markdown("**Mes**")
     with col_h5: st.markdown("**Vendedor**")
     with col_h6: st.markdown("**Baja**")
@@ -622,7 +622,7 @@ with tab_clientes:
         mes_color = "color:#6ee7b7;font-weight:600;" if es_pagado else "color:#fdba74;font-weight:600;"
         with col_r1: st.write(row['Nombre'])
         with col_r2: st.write(str(row['Telefono']) if str(row['Telefono']) not in ['nan', ''] else '—')
-        with col_r3: st.write(row['Equipo'])
+        with col_r3: st.write(row['Apps'])
         with col_r4: st.markdown(f"<span style='{mes_color}'>{mes_val}</span>", unsafe_allow_html=True)
         with col_r5: st.write(row['Vendedor'])
         with col_r6:
@@ -679,8 +679,8 @@ with tab_pagos:
                 vend_actual    = datos['Vendedor'] if datos['Vendedor'] in lista_vend else lista_vend[0]
                 nuevo_vendedor = st.selectbox("Vendedor", lista_vend, index=lista_vend.index(vend_actual))
             with col_m2:
-                nuevo_equipo   = st.selectbox("Equipo", ["ANDROID", "Sin Asignar"],
-                                              index=0 if datos['Equipo'] == "ANDROID" else 1)
+                nuevo_equipo   = st.selectbox("Apps", ["ON PLAY", "MULTI GEMA"],
+                                              index=0 if str(datos.get('Apps', 'ON PLAY')) == "ON PLAY" else 1)
                 meses_lista    = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
                                   "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"]
                 mes_idx        = meses_lista.index(mes_limpio) if mes_limpio in meses_lista else 0
@@ -693,7 +693,7 @@ with tab_pagos:
                 idx = df_raw[df_raw['Nombre'] == cliente_sel].index[0]
                 df_raw.at[idx, 'Nombre']   = nuevo_nombre.strip().upper()
                 df_raw.at[idx, 'Telefono'] = nuevo_tel.strip()
-                df_raw.at[idx, 'Equipo']   = nuevo_equipo
+                df_raw.at[idx, 'Apps']   = nuevo_equipo
                 df_raw.at[idx, 'Mes']      = mes_salida
                 df_raw.at[idx, 'Vendedor'] = nuevo_vendedor
                 with st.spinner("Guardando en la nube..."):
@@ -711,7 +711,7 @@ with tab_pagos:
             c_tel2      = st.text_input("Teléfono", key="nc_tel")
             c_vendedor2 = st.selectbox("Vendedor", list(vendedores_config.keys()), key="nc_vend")
         with col_c2:
-            c_equipo2   = st.selectbox("Equipo", ["ANDROID", "Sin Asignar"], key="nc_equipo")
+            c_equipo2   = st.selectbox("Apps", ["ON PLAY", "MULTI GEMA"], key="nc_equipo")
             c_mes2      = st.selectbox("Mes de Facturación",
                 ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
                  "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"], key="nc_mes")
@@ -723,7 +723,7 @@ with tab_pagos:
             else:
                 mes_sal2 = f"{c_mes2} [P]" if c_pagado2 else c_mes2
                 nueva    = {"Nombre": c_nombre2.strip().upper(), "Telefono": c_tel2.strip(),
-                            "Equipo": c_equipo2, "Mes": mes_sal2, "Vendedor": c_vendedor2}
+                            "Apps": c_equipo2, "Mes": mes_sal2, "Vendedor": c_vendedor2}
                 df_nuevo = pd.concat([df_raw, pd.DataFrame([nueva])], ignore_index=True)
                 with st.spinner("Guardando en la nube..."):
                     ok = github_write_csv(df_nuevo, csv_sha)
