@@ -318,10 +318,23 @@ if not st.session_state.logged_in:
 token = get_token()
 token_hash = hash(token)  # Para cache_data (no pasamos el token directo)
 
-# Cargar datos
-df_raw, csv_sha = load_data_cached(token_hash)
-config_data, config_sha = load_config_cached(token_hash)
-recibo_sha = load_image_cached(token_hash)
+# Cargar datos con manejo de errores de conexión
+try:
+    df_raw, csv_sha     = load_data_cached(token_hash)
+    config_data, config_sha = load_config_cached(token_hash)
+    recibo_sha          = load_image_cached(token_hash)
+except Exception as _conn_err:
+    st.error("⚠️ **No se pudo conectar con el servidor de datos (GitHub).**")
+    st.warning(
+        "Esto ocurre cuando GitHub tiene una caída temporal de su servicio. "
+        "Normalmente se resuelve solo en pocos minutos."
+    )
+    st.info("👉 Podés verificar el estado de GitHub en: https://www.githubstatus.com")
+    if st.button("🔄 Reintentar conexión", type="primary"):
+        st.cache_data.clear()
+        st.rerun()
+    st.stop()
+
 
 # ---- CONFIGURACIÓN DE VENDEDORES ----
 def get_default_config(df):
