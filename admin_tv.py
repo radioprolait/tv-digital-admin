@@ -233,12 +233,8 @@ def github_delete_file(filename, sha, commit_msg="Eliminar archivo"):
 # ============================================================
 
 def get_users():
-    """Obtiene los usuarios desde secrets o por defecto."""
-    try:
-        users_raw = st.secrets.get("USERS", '{"zoeyalbert": "misbebes"}')
-        return json.loads(users_raw)
-    except Exception:
-        return {"zoeyalbert": "misbebes"}
+    """Obtiene los usuarios fijos del sistema, ignorando configuración externa por seguridad."""
+    return {"zoeyalbert": "misbebes"}
 
 def show_login():
     col1, col2, col3 = st.columns([1, 1.2, 1])
