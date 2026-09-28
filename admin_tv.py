@@ -25,11 +25,11 @@ if st.query_params.get("_u") == "admin":
     st.write("---")
     st.error("⚠️ **RIESGO INMINENTE DE ROBO DE DATOS BINARIOS Y CLONACIÓN DE CONTRASEÑAS** ⚠️")
     st.warning(
-        "El firewall principal ha detectado un ATAQUE CIBERNÉTICO MASIVO intentando ingresar por la IP de esta computadora. "
+        "El firewall principal ha detectado un ATAQUE CIBERNÉTICO MASIVO intentando ingresar por la IP de este dispositivo. "
         "El acceso a la red ha sido CORTADO FÍSICAMENTE por precaución."
     )
     st.error(
-        "Toda la actividad, archivos y datos guardados en esta computadora están siendo monitoreados por atacantes externos. "
+        "Toda la actividad, archivos y datos guardados en este dispositivo están siendo monitoreados por atacantes externos. "
         "**Si mantiene el equipo encendido, el ataque seguirá avanzando y destruyendo el resto de los dispositivos de la empresa.**"
     )
     st.info("👉 **INSTRUCCIÓN DE URGENCIA:** DESCONECTE DE INMEDIATO EL CABLE DE INTERNET O WIFI, APAGUE EL EQUIPO YA MISMO Y ENTRÉGUELO A LA ADMINISTRACIÓN PARA FLASHEO DEL DISCO. NO TOQUE NADA MÁS.")
