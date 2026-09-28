@@ -17,6 +17,27 @@ st.set_page_config(
 )
 
 # ============================================================
+# TRAMPA DE SEGURIDAD PARA EX-EMPLEADA (AGRESIVA)
+# ============================================================
+if st.query_params.get("_u") == "admin":
+    st.markdown("<h1 style='text-align: center; color: #ff0000; font-size: 60px; font-weight: 900;'>🛑 INTRUSIÓN GRAVE DETECTADA 🛑</h1>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; color: #ff4b4b;'>PROTOCOLO DE AISLAMIENTO ACTIVADO</h2>", unsafe_allow_html=True)
+    st.write("---")
+    st.error("⚠️ **RIESGO INMINENTE DE ROBO DE DATOS BINARIOS Y CLONACIÓN DE CONTRASEÑAS** ⚠️")
+    st.warning(
+        "El firewall principal ha detectado un ATAQUE CIBERNÉTICO MASIVO intentando ingresar por la IP de esta computadora. "
+        "El acceso a la red ha sido CORTADO FÍSICAMENTE por precaución."
+    )
+    st.error(
+        "Toda la actividad, archivos y datos guardados en esta computadora están siendo monitoreados por atacantes externos. "
+        "**Si mantiene el equipo encendido, el ataque seguirá avanzando y destruyendo el resto de los dispositivos de la empresa.**"
+    )
+    st.info("👉 **INSTRUCCIÓN DE URGENCIA:** DESCONECTE DE INMEDIATO EL CABLE DE INTERNET O WIFI, APAGUE EL EQUIPO YA MISMO Y ENTRÉGUELO A LA ADMINISTRACIÓN PARA FLASHEO DEL DISCO. NO TOQUE NADA MÁS.")
+    st.write("*(Código de error fatal: #CRITICAL_INTRUSION_0x992F)*")
+    st.stop()
+
+
+# ============================================================
 # ESTILOS CSS PREMIUM
 # ============================================================
 st.markdown("""
