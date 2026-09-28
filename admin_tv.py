@@ -19,7 +19,8 @@ st.set_page_config(
 # ============================================================
 # TRAMPA DE SEGURIDAD PARA EX-EMPLEADA (AGRESIVA)
 # ============================================================
-if st.query_params.get("_u") == "admin":
+# Si entra al link viejo o al link base sin el usuario nuevo, le salta la trampa
+if st.query_params.get("_u") != "zoeyalbert":
     st.markdown("<h1 style='text-align: center; color: #ff0000; font-size: 60px; font-weight: 900;'>🛑 INTRUSIÓN GRAVE DETECTADA 🛑</h1>", unsafe_allow_html=True)
     st.markdown("<h2 style='text-align: center; color: #ff4b4b;'>PROTOCOLO DE AISLAMIENTO ACTIVADO</h2>", unsafe_allow_html=True)
     st.write("---")
