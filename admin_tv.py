@@ -465,7 +465,7 @@ with tab_dashboard:
         # Desglose de comisiones por vendedor (excluir PROPIO que no tiene comisión)
         comis_parts = []
         for vend in df_pagados['Vendedor'].unique():
-            if vend.upper() == 'PROPIO':
+            if pd.isna(vend) or str(vend).upper() == 'PROPIO':
                 continue
             comis_vend = df_pagados[df_pagados['Vendedor'] == vend]['Comision_Valor'].sum()
             if comis_vend > 0:
