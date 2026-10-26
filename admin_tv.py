@@ -17,28 +17,6 @@ st.set_page_config(
 )
 
 # ============================================================
-# TRAMPA DE SEGURIDAD PARA EX-EMPLEADA (AGRESIVA)
-# ============================================================
-# Si entra al link viejo o al link base sin el usuario nuevo, le salta la trampa
-if st.query_params.get("_u") != "zoeyalbert":
-    st.markdown("<h1 style='text-align: center; color: #ff0000; font-size: 60px; font-weight: 900;'>🛑 INTRUSIÓN GRAVE DETECTADA 🛑</h1>", unsafe_allow_html=True)
-    st.markdown("<h2 style='text-align: center; color: #ff4b4b;'>PROTOCOLO DE AISLAMIENTO ACTIVADO</h2>", unsafe_allow_html=True)
-    st.write("---")
-    st.error("⚠️ **RIESGO INMINENTE DE ROBO DE DATOS BINARIOS Y CLONACIÓN DE CONTRASEÑAS** ⚠️")
-    st.warning(
-        "El firewall principal ha detectado un ATAQUE CIBERNÉTICO MASIVO intentando ingresar por la IP de este dispositivo. "
-        "El acceso a la red ha sido CORTADO FÍSICAMENTE por precaución."
-    )
-    st.error(
-        "Toda la actividad, archivos y datos guardados en este dispositivo están siendo monitoreados por atacantes externos. "
-        "**Si mantiene el equipo encendido, el ataque seguirá avanzando y destruyendo el resto de los dispositivos de la empresa.**"
-    )
-    st.info("👉 **INSTRUCCIÓN DE URGENCIA:** DESCONECTE DE INMEDIATO EL CABLE DE INTERNET O WIFI, APAGUE EL EQUIPO YA MISMO Y ENTRÉGUELO A LA ADMINISTRACIÓN PARA FLASHEO DEL DISCO. NO TOQUE NADA MÁS.")
-    st.write("*(Código de error fatal: #CRITICAL_INTRUSION_0x992F)*")
-    st.stop()
-
-
-# ============================================================
 # ESTILOS CSS PREMIUM
 # ============================================================
 st.markdown("""
@@ -465,7 +443,7 @@ with tab_dashboard:
         # Desglose de comisiones por vendedor (excluir PROPIO que no tiene comisión)
         comis_parts = []
         for vend in df_pagados['Vendedor'].unique():
-            if pd.isna(vend) or str(vend).upper() == 'PROPIO':
+            if vend.upper() == 'PROPIO':
                 continue
             comis_vend = df_pagados[df_pagados['Vendedor'] == vend]['Comision_Valor'].sum()
             if comis_vend > 0:
