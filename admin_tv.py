@@ -1,16 +1,18 @@
 import streamlit as st
 import pandas as pd
-import json
 import os
 import io
 import base64
+import math
+import urllib.parse
+from datetime import datetime
 from github import Github, Auth, GithubException
 
 # ============================================================
 # CONFIGURACIÓN DE PÁGINA
 # ============================================================
 st.set_page_config(
-    page_title="Admin TV Digital",
+    page_title="Admin TV Digital — Mar TV",
     page_icon="📺",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -68,7 +70,7 @@ st.markdown("""
     .metric-card:hover { transform: translateY(-2px); }
     .metric-title {
         font-size: 12px;
-        color: #64748b;
+        color: #94a3b8;
         margin-bottom: 10px;
         font-weight: 600;
         text-transform: uppercase;
@@ -85,22 +87,22 @@ st.markdown("""
     .metric-value.purple { color: #c084fc; }
     .metric-subtitle {
         font-size: 12px;
-        color: #475569;
-        margin-top: 6px;
+        color: #64748b;
+        margin-top: 8px;
     }
-
-    /* BADGE DE ESTADO */
-    .badge-pagado   { background:#065f46; color:#6ee7b7; padding:3px 10px; border-radius:99px; font-size:12px; font-weight:600; }
-    .badge-pendiente{ background:#7c2d12; color:#fdba74; padding:3px 10px; border-radius:99px; font-size:12px; font-weight:600; }
     </style>
 """, unsafe_allow_html=True)
 
 # ============================================================
 # CONFIGURACIÓN: TOKEN Y REPO
 # ============================================================
-REPO_NAME   = "tv-digital-admin"
-CSV_FILE    = "base_datos_tv.csv"
-CONFIG_FILE = "vendedores_config.json"
+REPO_NAME = "tv-digital-admin"
+CSV_FILE  = "base_datos_tv.csv"
+MESES_LISTA = [
+    "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+    "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
+]
+RECIBO_RAW_URL = "https://raw.githubusercontent.com/radioprolait/tv-digital-admin/main/recibo_mes.png"
 
 def get_token():
     try:
@@ -108,10 +110,10 @@ def get_token():
     except Exception:
         return os.environ.get("GITHUB_TOKEN", "")
 
-@st.cache_resource(ttl=300)
+@st.cache_resource(ttl=600)
 def _get_cached_repo(token):
     auth = Auth.Token(token)
-    g = Github(auth=auth, timeout=10)
+    g = Github(auth=auth, timeout=12)
     return g.get_repo(f"radioprolait/{REPO_NAME}")
 
 def get_repo():
@@ -122,7 +124,7 @@ def get_repo():
     return _get_cached_repo(token)
 
 # ============================================================
-# FUNCIONES DE DATOS — GITHUB
+# FUNCIONES DE DATOS — GITHUB + MEMORIA INSTANTÁNEA
 # ============================================================
 
 def github_read_csv():
@@ -131,7 +133,7 @@ def github_read_csv():
         repo = get_repo()
         contents = repo.get_contents(CSV_FILE)
         raw = base64.b64decode(contents.content)
-        # Intentar encodings comunes
+        text = None
         for enc in ['utf-8', 'latin1', 'cp1252']:
             try:
                 text = raw.decode(enc)
@@ -139,82 +141,58 @@ def github_read_csv():
             except Exception:
                 continue
         df = pd.read_csv(io.StringIO(text))
-        for col in df.columns:
+        for col in ["Nombre", "Telefono", "Apps", "Mes", "Vendedor"]:
+            if col not in df.columns:
+                df[col] = "PROPIO" if col == "Vendedor" else ""
             df[col] = df[col].astype(str).str.strip().replace('nan', '')
         return df, contents.sha
     except GithubException as e:
         if e.status == 404:
-            # El archivo no existe aún, devolvemos vacío
             empty = pd.DataFrame(columns=["Nombre", "Telefono", "Apps", "Mes", "Vendedor"])
             return empty, None
-        st.error(f"Error GitHub al leer datos: {e}")
-        return pd.DataFrame(columns=["Nombre", "Telefono", "Apps", "Mes", "Vendedor"]), None
+        raise e
 
-def github_write_csv(df, sha):
-    """Guarda el DataFrame como CSV en GitHub (con reintento automático de SHA)."""
+def save_df_instant(df_nuevo, commit_msg="Actualizar base de clientes"):
+    """
+    Guarda el DataFrame en GitHub y actualiza st.session_state en el acto
+    sin tener que volver a descargar el CSV desde internet.
+    """
     try:
         repo = get_repo()
-        csv_content = df.to_csv(index=False, encoding='utf-8')
+        df_clean = df_nuevo[["Nombre", "Telefono", "Apps", "Mes", "Vendedor"]].copy()
+        csv_content = df_clean.to_csv(index=False, encoding='utf-8')
+        sha = st.session_state.get("csv_sha")
         if sha:
             try:
-                repo.update_file(CSV_FILE, "Actualizar base de clientes", csv_content, sha)
+                res = repo.update_file(CSV_FILE, commit_msg, csv_content, sha)
             except GithubException as ge:
-                if ge.status in (409, 500, 502, 503):
+                if ge.status in (409, 422, 500, 502, 503):
                     fresh_sha = repo.get_contents(CSV_FILE).sha
-                    repo.update_file(CSV_FILE, "Actualizar base de clientes", csv_content, fresh_sha)
+                    res = repo.update_file(CSV_FILE, commit_msg, csv_content, fresh_sha)
                 else:
                     raise ge
         else:
-            repo.create_file(CSV_FILE, "Crear base de clientes", csv_content)
-        st.cache_data.clear()
+            res = repo.create_file(CSV_FILE, "Crear base de clientes", csv_content)
+
+        # Actualizar memoria instantánea con el nuevo SHA devuelto por GitHub
+        new_sha = res["content"].sha if isinstance(res, dict) and "content" in res else repo.get_contents(CSV_FILE).sha
+        st.session_state.df_data = df_clean.reset_index(drop=True)
+        st.session_state.csv_sha = new_sha
         return True
     except Exception as e:
-        st.error(f"Error al guardar datos: {e}")
+        st.error(f"Error al guardar datos en GitHub: {e}")
         return False
 
-def github_read_json(filename):
-    """Lee un JSON desde GitHub."""
+@st.cache_data(ttl=120)
+def load_image_cached(_token_hash):
     try:
         repo = get_repo()
-        contents = repo.get_contents(filename)
-        raw = base64.b64decode(contents.content).decode('utf-8')
-        return json.loads(raw), contents.sha
-    except GithubException as e:
-        if e.status == 404:
-            return None, None
-        return None, None
-
-def github_write_json(filename, data, sha, commit_msg="Actualizar configuración"):
-    """Guarda un JSON en GitHub."""
-    try:
-        repo = get_repo()
-        content = json.dumps(data, indent=4, ensure_ascii=False)
-        if sha:
-            repo.update_file(filename, commit_msg, content, sha)
-        else:
-            repo.create_file(filename, commit_msg, content)
-        return True
-    except Exception as e:
-        st.error(f"Error al guardar configuración: {e}")
-        return False
-
-RECIBO_RAW_URL = "https://raw.githubusercontent.com/radioprolait/tv-digital-admin/main/recibo_mes.png"
-
-def github_read_image(filename="recibo_mes.png"):
-    """Verifica si existe la imagen en GitHub y devuelve su SHA (sin descargar contenido)."""
-    try:
-        repo = get_repo()
-        contents = repo.get_contents(filename)
+        contents = repo.get_contents("recibo_mes.png")
         return contents.sha
-    except GithubException as e:
-        if e.status == 404:
-            return None
-        return None
     except Exception:
         return None
 
 def github_write_image(filename, image_bytes, sha, commit_msg="Actualizar recibo de pago"):
-    """Guarda una imagen en GitHub."""
     try:
         repo = get_repo()
         if sha:
@@ -228,7 +206,6 @@ def github_write_image(filename, image_bytes, sha, commit_msg="Actualizar recibo
         return False
 
 def github_delete_file(filename, sha, commit_msg="Eliminar archivo"):
-    """Elimina un archivo de GitHub."""
     try:
         repo = get_repo()
         repo.delete_file(filename, commit_msg, sha)
@@ -239,11 +216,30 @@ def github_delete_file(filename, sha, commit_msg="Eliminar archivo"):
         return False
 
 # ============================================================
+# HELPER: FORMATEAR TELÉFONO DE ARGENTINA PARA WHATSAPP
+# ============================================================
+def format_argentina_phone(phone):
+    if not phone or pd.isna(phone):
+        return None
+    clean = "".join(filter(str.isdigit, str(phone)))
+    if not clean or clean == "123":
+        return None
+    if clean.startswith("54"):
+        if len(clean) == 12 and not clean.startswith("549"):
+            clean = "549" + clean[2:]
+        return clean
+    if len(clean) == 10:
+        return "549" + clean
+    if len(clean) == 11 and clean.startswith("9"):
+        return "54" + clean
+    if len(clean) < 10:
+        return None
+    return "549" + clean
+
+# ============================================================
 # SISTEMA DE LOGIN
 # ============================================================
-
 def get_users():
-    """Obtiene los usuarios fijos del sistema, ignorando configuración externa por seguridad."""
     return {"zoeyalbert": "misbebes"}
 
 def show_login():
@@ -252,8 +248,8 @@ def show_login():
         st.markdown("""
             <div class="login-container">
                 <div class="login-logo">📺</div>
-                <div class="login-title">TV Digital Admin</div>
-                <div class="login-subtitle">Sistema de Gestión Privado</div>
+                <div class="login-title">Mar TV Admin</div>
+                <div class="login-subtitle">Sistema de Gestión de Clientes</div>
             </div>
         """, unsafe_allow_html=True)
         st.write("")
@@ -282,207 +278,207 @@ def logout():
     st.rerun()
 
 # ============================================================
-# CARGA INICIAL CON CACHÉ
+# MAIN APP — AUTENTICACIÓN
 # ============================================================
-
-@st.cache_data(ttl=60)
-def load_data_cached(_token_hash):
-    return github_read_csv()
-
-@st.cache_data(ttl=60)
-def load_config_cached(_token_hash):
-    return github_read_json(CONFIG_FILE)
-
-@st.cache_data(ttl=60)
-def load_image_cached(_token_hash):
-    return github_read_image()
-
-# ============================================================
-# MAIN APP
-# ============================================================
-
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 if "username" not in st.session_state:
     st.session_state.username = ""
 
-# Restaurar sesión desde query params (login persistente)
 if not st.session_state.logged_in:
     saved_user = st.query_params.get("_u", "")
-    if saved_user:
-        users = get_users()
-        if saved_user in users:
-            st.session_state.logged_in = True
-            st.session_state.username  = saved_user
+    if saved_user and saved_user in get_users():
+        st.session_state.logged_in = True
+        st.session_state.username  = saved_user
 
-# Mostrar login si no está autenticado
 if not st.session_state.logged_in:
     show_login()
     st.stop()
 
-# ---- USUARIO AUTENTICADO ----
+# ============================================================
+# CARGA DE DATOS EN MEMORIA DE SESIÓN (MODO TURBO)
+# ============================================================
 token = get_token()
-token_hash = hash(token)  # Para cache_data (no pasamos el token directo)
+token_hash = hash(token)
 
-# Cargar datos con manejo de errores de conexión
-try:
-    df_raw, csv_sha     = load_data_cached(token_hash)
-    config_data, config_sha = load_config_cached(token_hash)
-    recibo_sha          = load_image_cached(token_hash)
-except Exception as _conn_err:
-    st.error("⚠️ **No se pudo conectar con el servidor de datos (GitHub).**")
-    st.warning(
-        "Esto ocurre cuando GitHub tiene una caída temporal de su servicio. "
-        "Normalmente se resuelve solo en pocos minutos."
-    )
-    st.info("👉 Podés verificar el estado de GitHub en: https://www.githubstatus.com")
-    if st.button("🔄 Reintentar conexión", type="primary"):
-        st.cache_data.clear()
-        st.rerun()
-    st.stop()
+if "df_data" not in st.session_state or "csv_sha" not in st.session_state:
+    try:
+        with st.spinner("Cargando base de clientes..."):
+            df_loaded, sha_loaded = github_read_csv()
+            st.session_state.df_data = df_loaded.reset_index(drop=True)
+            st.session_state.csv_sha = sha_loaded
+    except Exception as _conn_err:
+        st.error("⚠️ **No se pudo conectar con GitHub.**")
+        if st.button("🔄 Reintentar conexión", type="primary"):
+            st.rerun()
+        st.stop()
 
+df_raw = st.session_state.df_data
 
-# ---- CONFIGURACIÓN DE VENDEDORES ----
-def get_default_config(df):
-    config = {}
-    vendedores = [v for v in df['Vendedor'].unique() if v and v != ''] if 'Vendedor' in df.columns else []
-    if not vendedores:
-        vendedores = ['PROPIO', 'NOE', 'EUGE', 'MICA', 'ALEXIS']
-    for v in vendedores:
-        if v.upper() == 'PROPIO':
-            precio = 10000.0
-        elif v.upper() == 'ALEXIS':
-            precio = 5000.0
-        else:
-            precio = 4000.0
-        config[v] = {"nombre": v, "precio_vendedor": precio}
-    return config
+# Preprocesamiento rápido en memoria
+df = df_raw.copy()
+df["RowID"]      = df.index
+df["Pagado"]     = df["Mes"].apply(lambda x: "[P]" in str(x).upper())
+df["Mes_Limpio"] = df["Mes"].apply(lambda x: str(x).split("[")[0].strip().upper())
 
-if config_data is None:
-    config_data = get_default_config(df_raw)
-    github_write_json(CONFIG_FILE, config_data, None)
+# Detectar automáticamente el mes activo de la base (ej: NOVIEMBRE)
+meses_validos = [m for m in df["Mes_Limpio"] if m in MESES_LISTA]
+mes_activo_default = pd.Series(meses_validos).mode().iloc[0] if meses_validos else "NOVIEMBRE"
+mes_default_idx = MESES_LISTA.index(mes_activo_default) if mes_activo_default in MESES_LISTA else 10
 
-vendedores_config = config_data
-
-# ---- SIDEBAR ----
-st.sidebar.title("⚙️ Configuración")
+# ============================================================
+# SIDEBAR (CONFIGURACIÓN + BACKUP EN 1 CLIC + SINCRONIZAR)
+# ============================================================
+st.sidebar.title("⚙️ Panel Mar TV")
 abono_general = st.sidebar.number_input(
-    "Valor del Abono ($)",
+    "💵 Valor del Abono ($)",
     min_value=0, value=12000, step=500,
     help="Precio mensual cobrado a cada cliente."
 )
+
+st.sidebar.divider()
+st.sidebar.subheader("🛡️ Copia de Seguridad")
+fecha_str = datetime.now().strftime("%Y-%m-%d")
+csv_backup_bytes = df_raw.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+st.sidebar.download_button(
+    label="📥 Descargar Backup (Excel/CSV)",
+    data=csv_backup_bytes,
+    file_name=f"backup_martv_{fecha_str}_{len(df_raw)}clientes.csv",
+    mime="text/csv",
+    use_container_width=True,
+    help="Descarga una copia completa de tus clientes a tu computadora."
+)
+
+if st.sidebar.button("🔄 Sincronizar con la Nube", use_container_width=True, help="Recarga los datos desde GitHub si hiciste cambios desde otro dispositivo."):
+    df_loaded, sha_loaded = github_read_csv()
+    st.session_state.df_data = df_loaded.reset_index(drop=True)
+    st.session_state.csv_sha = sha_loaded
+    st.cache_data.clear()
+    st.sidebar.success("¡Base sincronizada!")
+    st.rerun()
+
 st.sidebar.divider()
 st.sidebar.write(f"👤 Sesión: **{st.session_state.username}**")
-if st.sidebar.button("🚩 Cerrar Sesión"):
+if st.sidebar.button("🚩 Cerrar Sesión", use_container_width=True):
     logout()
 
-# ---- TÍTULO ----
-st.title("📺 Panel de Control — TV Digital")
-st.write("Sistema de gestión de clientes, cobros y comisiones.")
+# ============================================================
+# TÍTULO Y TABS PRINCIPALES
+# ============================================================
+st.title("📺 Panel de Control — Mar TV")
 
-# ---- PREPROCESAMIENTO ----
-df = df_raw.copy()
-df['Pagado']     = df['Mes'].apply(lambda x: '[P]' in str(x).upper())
-df['Mes_Limpio'] = df['Mes'].apply(lambda x: str(x).split('[')[0].strip().upper())
-
-def calcular_precio_vendedor(row):
-    vend = row['Vendedor'] if row['Vendedor'] else 'SIN ASIGNAR'
-    if vend in vendedores_config:
-        conf = vendedores_config[vend]
-        if vend.upper() == 'PROPIO':
-            return float(abono_general)
-        return float(conf.get("precio_vendedor", 4000.0))
-    return 4000.0
-
-df['Precio_Vendedor'] = df.apply(calcular_precio_vendedor, axis=1)
-df['Monto_Facturado'] = abono_general
-df['Comision_Valor']  = df['Monto_Facturado'] - df['Precio_Vendedor']
-df['Ganancia_Valor']  = df['Precio_Vendedor']
-
-# ---- TABS ----
-tab_dashboard, tab_clientes, tab_pagos, tab_vendedores, tab_whatsapp = st.tabs([
-    "📊 Tablero General",
-    "👥 Clientes y Filtros",
-    "💰 Registrar Pagos / CRUD",
-    "⚙️ Gestión de Vendedores",
+tab_dashboard, tab_clientes, tab_crud, tab_whatsapp = st.tabs([
+    "📊 Tablero y Cobro en Lote",
+    "⚡ Clientes y Cobro Rápido",
+    "✏️ Agregar / Editar Cliente",
     "📨 Avisos WhatsApp"
 ])
 
 # ===================================================
-# TAB 1 — TABLERO GENERAL
+# TAB 1 — TABLERO GENERAL + COBRO EN LOTE + ALTA RÁPIDA
 # ===================================================
 with tab_dashboard:
-    st.subheader("📈 Resumen del Negocio")
-
-    total_clientes         = len(df)
-    total_pagos            = len(df[df['Pagado'] == True])
-    total_impagos          = len(df[df['Pagado'] == False])
-    recaudacion_bruta      = total_pagos * abono_general
-    plata_cobrada_neta     = df[df['Pagado'] == True]['Precio_Vendedor'].sum()
-    plata_pendiente_neta   = df[df['Pagado'] == False]['Precio_Vendedor'].sum()
-    comisiones_pagos       = df[df['Pagado'] == True]['Comision_Valor'].sum()
+    total_clientes = len(df)
+    total_pagos    = int(df["Pagado"].sum())
+    total_impagos  = total_clientes - total_pagos
+    plata_cobrada  = total_pagos * abono_general
+    plata_pendiente = total_impagos * abono_general
+    potencial_mes  = total_clientes * abono_general
+    efectividad    = (total_pagos / total_clientes * 100) if total_clientes > 0 else 0.0
+    meta_600_pct   = min(total_clientes / 600.0, 1.0)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown(f"""<div class="metric-card">
-            <div class="metric-title">Clientes Totales</div>
+            <div class="metric-title">Clientes Activos</div>
             <div class="metric-value">{total_clientes}</div>
-            <div class="metric-subtitle">Pagados: {total_pagos} | Pendientes: {total_impagos}</div>
+            <div class="metric-subtitle">✅ Pagados: {total_pagos} | ⏳ Pendientes: {total_impagos}</div>
         </div>""", unsafe_allow_html=True)
     with col2:
-        # Desglose por vendedor de los pagos cobrados
-        df_pagados = df[df['Pagado'] == True]
-        desglose_parts = []
-        for vend in df_pagados['Vendedor'].unique():
-            cantidad = len(df_pagados[df_pagados['Vendedor'] == vend])
-            subtotal = df_pagados[df_pagados['Vendedor'] == vend]['Precio_Vendedor'].sum()
-            desglose_parts.append(f"{cantidad} {vend}: ${subtotal:,.0f}")
-        desglose_txt = " | ".join(desglose_parts) if desglose_parts else "Sin pagos aún"
         st.markdown(f"""<div class="metric-card">
-            <div class="metric-title">Tu Plata Cobrada (Neto)</div>
-            <div class="metric-value green">${plata_cobrada_neta:,.0f}</div>
-            <div class="metric-subtitle">{desglose_txt}</div>
+            <div class="metric-title">Plata Cobrada ({mes_activo_default})</div>
+            <div class="metric-value green">${plata_cobrada:,.0f}</div>
+            <div class="metric-subtitle">Efectividad hoy: {efectividad:.1f}% cobrado</div>
         </div>""", unsafe_allow_html=True)
     with col3:
         st.markdown(f"""<div class="metric-card">
-            <div class="metric-title">Tu Plata Pendiente (Neto)</div>
-            <div class="metric-value orange">${plata_pendiente_neta:,.0f}</div>
-            <div class="metric-subtitle">De {total_impagos} clientes impagos</div>
+            <div class="metric-title">Plata por Entrar</div>
+            <div class="metric-value orange">${plata_pendiente:,.0f}</div>
+            <div class="metric-subtitle">Potencial total del mes: ${potencial_mes:,.0f}</div>
         </div>""", unsafe_allow_html=True)
     with col4:
-        # Desglose de comisiones por vendedor (excluir PROPIO que no tiene comisión)
-        comis_parts = []
-        for vend in df_pagados['Vendedor'].unique():
-            if vend.upper() == 'PROPIO':
-                continue
-            comis_vend = df_pagados[df_pagados['Vendedor'] == vend]['Comision_Valor'].sum()
-            if comis_vend > 0:
-                comis_parts.append(f"{vend}: ${comis_vend:,.0f}")
-        comis_txt = " | ".join(comis_parts) if comis_parts else "Sin comisiones aún"
+        faltan_600 = max(600 - total_clientes, 0)
         st.markdown(f"""<div class="metric-card">
-            <div class="metric-title">Comisiones Vendedores</div>
-            <div class="metric-value purple">${comisiones_pagos:,.0f}</div>
-            <div class="metric-subtitle">{comis_txt}</div>
+            <div class="metric-title">🎯 Meta 600 Clientes</div>
+            <div class="metric-value purple">{total_clientes} / 600</div>
+            <div class="metric-subtitle">{meta_600_pct*100:.1f}% alcanzado (faltan {faltan_600})</div>
         </div>""", unsafe_allow_html=True)
+
+    st.progress(meta_600_pct, text=f"🚀 Progreso hacia los 600 clientes: {total_clientes}/600 ({meta_600_pct*100:.1f}%) — Facturación potencial a los 600: ${600*abono_general:,.0f}/mes")
 
     st.divider()
 
-    # Alta Rápida
+    # ---- COBRO EN LOTE (MÚLTIPLE) ----
+    st.subheader("⚡ Cobro Relámpago en Lote (Marcar varios pagos juntos)")
+    df_pend_lote = df[df["Pagado"] == False]
+    if df_pend_lote.empty:
+        st.success("🎉 ¡Todos los clientes están al día!")
+    else:
+        opciones_lote = {
+            f"{row['Nombre']} ({row['Telefono'] if row['Telefono'] else 'Sin tel'}) — #{row['RowID']+1}": row["RowID"]
+            for _, row in df_pend_lote.iterrows()
+        }
+        col_lote1, col_lote2 = st.columns([3, 1])
+        with col_lote1:
+            seleccionados_labels = st.multiselect(
+                "Escribí los nombres o teléfonos de los clientes que te transfirieron y marcalos todos juntos:",
+                options=list(opciones_lote.keys()),
+                placeholder="Ej: escribí el nombre o teléfono para elegir 1 o varios clientes..."
+            )
+        with col_lote2:
+            st.write("")
+            st.write("")
+            if st.button(f"✅ Marcar {len(seleccionados_labels)} Pagado(s)", type="primary", use_container_width=True, disabled=(len(seleccionados_labels) == 0)):
+                df_upd = df_raw.copy()
+                for lbl in seleccionados_labels:
+                    r_id = opciones_lote[lbl]
+                    mes_base = str(df_upd.at[r_id, "Mes"]).split("[")[0].strip().upper()
+                    if not mes_base or mes_base == "NAN":
+                        mes_base = mes_activo_default
+                    df_upd.at[r_id, "Mes"] = f"{mes_base} [P]"
+                with st.spinner("Guardando pagos en lote..."):
+                    ok = save_df_instant(df_upd, f"Registrar {len(seleccionados_labels)} pagos en lote")
+                if ok:
+                    st.success(f"¡{len(seleccionados_labels)} pago(s) registrado(s) en un segundo!")
+                    st.rerun()
+
+    st.divider()
+
+    # ---- ALTA RÁPIDA (PUM!) CON DETECTOR DE DUPLICADOS ----
     with st.expander("➕  PUM! — AGREGAR NUEVO CLIENTE (Alta Rápida)", expanded=False):
         col_c1, col_c2 = st.columns(2)
         with col_c1:
-            c_nombre   = st.text_input("Nombre Completo", key="qc_nombre")
-            c_tel      = st.text_input("Teléfono", key="qc_tel")
-            c_vendedor = st.selectbox("Vendedor Asignado", list(vendedores_config.keys()), key="qc_vendedor")
+            c_nombre = st.text_input("Nombre Completo", key="qc_nombre")
+            c_tel    = st.text_input("Teléfono", key="qc_tel")
         with col_c2:
-            c_equipo   = st.selectbox("Apps", ["ON PLAY", "MULTI GEMA"], key="qc_equipo")
-            c_mes      = st.selectbox("Mes de Facturación",
-                ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
-                 "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"],
-                index=10, key="qc_mes")
-            c_pagado   = st.checkbox("Registrar como PAGADO", value=True, key="qc_pagado")
+            c_equipo = st.selectbox("App", ["ON PLAY", "MarTV", "MULTI GEMA"], key="qc_equipo")
+            c_mes    = st.selectbox("Mes de Facturación", MESES_LISTA, index=mes_default_idx, key="qc_mes")
+            c_pagado = st.checkbox("Registrar como PAGADO", value=True, key="qc_pagado")
 
-        if st.button("🚀 PUM! CREAR CLIENTE", key="qc_btn"):
+        # Aviso inteligente en vivo si ya existe el nombre o teléfono
+        if c_nombre.strip():
+            dup_nom = df[df["Nombre"].str.upper() == c_nombre.strip().upper()]
+            if not dup_nom.empty:
+                st.warning(f"⚠️ Ya existe un cliente llamado **{c_nombre.strip().upper()}** (Tel: {dup_nom.iloc[0]['Telefono']}). Si es una segunda cuenta, podés ponerle **{c_nombre.strip().upper()} 2**.")
+        if c_tel.strip():
+            clean_new_tel = "".join(filter(str.isdigit, c_tel.strip()))
+            if len(clean_new_tel) >= 7:
+                dup_tel = df[df["Telefono"].apply(lambda t: clean_new_tel in "".join(filter(str.isdigit, str(t))))]
+                if not dup_tel.empty:
+                    nombres_mismo_tel = ", ".join(dup_tel["Nombre"].tolist())
+                    st.info(f"ℹ️ Este número de teléfono ya lo tiene: **{nombres_mismo_tel}**.")
+
+        if st.button("🚀 PUM! CREAR CLIENTE", key="qc_btn", type="primary"):
             if not c_nombre.strip():
                 st.error("Ingresá un nombre para el cliente.")
             else:
@@ -492,44 +488,50 @@ with tab_dashboard:
                     "Telefono": c_tel.strip(),
                     "Apps": c_equipo,
                     "Mes": mes_sal,
-                    "Vendedor": c_vendedor
+                    "Vendedor": "PROPIO"
                 }
                 df_nuevo = pd.concat([df_raw, pd.DataFrame([nueva_fila])], ignore_index=True)
-                with st.spinner("Guardando en la nube..."):
-                    ok = github_write_csv(df_nuevo, csv_sha)
+                with st.spinner("Guardando cliente..."):
+                    ok = save_df_instant(df_nuevo, f"Alta cliente {c_nombre.strip().upper()}")
                 if ok:
-                    st.success(f"Cliente {c_nombre.upper()} agregado!")
+                    st.success(f"¡Cliente {c_nombre.strip().upper()} agregado con éxito!")
                     st.rerun()
 
     st.divider()
 
-    # Cierre de Mes
-    with st.expander("🗓️  CIERRE DE MES — Resetear y arrancar mes nuevo", expanded=False):
-        st.markdown("""
-        **¿Qué hace el cierre de mes?**
-        - Quita el estado PAGADO de **todos** los clientes (vuelven a pendiente)
-        - Cambia el mes de facturación al mes nuevo que elijas
-        - Los datos del mes anterior quedan en cero, listos para arrancar
-        """)
-        st.warning("Esta acción modifica TODOS los clientes. No se puede deshacer.")
+    # ---- ÚLTIMOS 10 CLIENTES AGREGADOS ----
+    st.subheader("🆕 Últimos 10 Clientes Agregados")
+    st.caption("Ideal para ver de un vistazo los clientes nuevos y agendarlos en tus listas de WhatsApp.")
+    ultimos_10 = df.tail(10).iloc[::-1].copy()
+    ultimos_10["# Orden"] = ultimos_10["RowID"] + 1
+    ultimos_10["Estado"]  = ultimos_10["Pagado"].apply(lambda p: "✅ PAGADO" if p else "⏳ PENDIENTE")
+    st.dataframe(
+        ultimos_10[["# Orden", "Nombre", "Telefono", "Apps", "Mes", "Estado"]],
+        use_container_width=True,
+        hide_index=True
+    )
 
+    st.divider()
+
+    # ---- CIERRE DE MES ----
+    with st.expander("🗓️  CIERRE DE MES — Resetear y arrancar mes nuevo", expanded=False):
+        st.warning("Esta acción pasa TODOS los clientes a PENDIENTE en el mes nuevo que elijas.")
         col_cm1, col_cm2 = st.columns(2)
         with col_cm1:
+            proximo_idx = (mes_default_idx + 1) % 12
             mes_nuevo = st.selectbox(
                 "Mes nuevo a asignar a todos los clientes",
-                ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
-                 "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"],
-                index=6,  # JULIO por defecto
+                MESES_LISTA,
+                index=proximo_idx,
                 key="cierre_mes"
             )
         with col_cm2:
             st.write("")
             st.write("")
-            pagados_actuales = len(df[df['Pagado'] == True])
-            st.info(f"Clientes pagados que se van a resetear: **{pagados_actuales}**")
+            st.info(f"Clientes pagados actuales que se van a resetear: **{total_pagos}**")
 
         confirmar_cierre = st.checkbox(
-            f"Confirmo el cierre de mes. Todos los clientes pasarán a PENDIENTE en {mes_nuevo}.",
+            f"Confirmo el cierre de mes. Todos los {total_clientes} clientes pasarán a PENDIENTE en {mes_nuevo}.",
             key="confirmar_cierre"
         )
 
@@ -537,479 +539,335 @@ with tab_dashboard:
             if not confirmar_cierre:
                 st.error("Marcá la casilla de confirmación para continuar.")
             else:
-                # Resetear: quitar [P] y actualizar mes en todos los clientes
                 df_cierre = df_raw.copy()
-                df_cierre['Mes'] = mes_nuevo  # Todos pasan al mes nuevo, sin [P]
-                with st.spinner(f"Ejecutando cierre de mes... asignando {mes_nuevo} a todos los clientes."):
-                    ok = github_write_csv(df_cierre, csv_sha)
+                df_cierre["Mes"] = mes_nuevo
+                with st.spinner(f"Ejecutando cierre de mes a {mes_nuevo}..."):
+                    ok = save_df_instant(df_cierre, f"Cierre de mes a {mes_nuevo}")
                 if ok:
-                    st.success(f"Cierre de mes ejecutado! Todos los clientes ahora figuran en {mes_nuevo} como PENDIENTES. Listo para arrancar!")
+                    st.success(f"¡Cierre de mes ejecutado! Todos figuran en {mes_nuevo} como PENDIENTES.")
                     st.balloons()
                     st.rerun()
 
-    st.divider()
-
-    # Métricas por vendedor
-    st.subheader("👤 Rentabilidad por Vendedor")
-    vendedor_stats = []
-    for vend, conf in vendedores_config.items():
-        sub  = df[df['Vendedor'] == vend]
-        c_t  = len(sub)
-        c_p  = len(sub[sub['Pagado'] == True])
-        c_pend = len(sub[sub['Pagado'] == False])
-        cobrado   = c_p * abono_general
-        neta      = sub[sub['Pagado'] == True]['Precio_Vendedor'].sum()
-        pendiente = sub[sub['Pagado'] == False]['Precio_Vendedor'].sum()
-        comis     = sub[sub['Pagado'] == True]['Comision_Valor'].sum()
-        margen    = (neta / cobrado * 100) if cobrado > 0 else 0.0
-        vendedor_stats.append({
-            "Vendedor": vend,
-            "Clientes": c_t,
-            "Pagos": c_p,
-            "Pendientes": c_pend,
-            "Cobrado Clientes ($)": cobrado,
-            "Comisión ($)": comis,
-            "Tu Recaudación ($)": neta,
-            "Margen (%)": f"{margen:.1f}%"
-        })
-
-    df_vend = pd.DataFrame(vendedor_stats)
-    st.dataframe(df_vend, use_container_width=True, hide_index=True)
-
-    st.subheader("📊 Comparación Visual")
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        st.write("**Clientes Pagos vs Pendientes**")
-        st.bar_chart(df_vend.set_index("Vendedor")[["Pagos", "Pendientes"]])
-    with col_g2:
-        st.write("**Tu Recaudación Real ($)**")
-        st.bar_chart(df_vend.set_index("Vendedor")[["Tu Recaudación ($)"]])
-
 
 # ===================================================
-# TAB 2 — CLIENTES Y FILTROS
+# TAB 2 — CLIENTES Y COBRO RÁPIDO (PAGINADO TURBO)
 # ===================================================
 with tab_clientes:
-    st.subheader("Buscar y Filtrar Clientes")
+    st.subheader("⚡ Buscar, Filtrar y Cobrar en 1 Clic")
 
-    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+    col_f1, col_f2, col_f3, col_f4 = st.columns([2.2, 1.2, 1.2, 1.0])
     with col_f1:
-        busqueda = st.text_input("Buscar por nombre o teléfono")
+        busqueda = st.text_input("🔍 Buscar por nombre o teléfono", placeholder="Escribí nombre o número...")
     with col_f2:
-        filtro_vendedor = st.selectbox("Filtrar por Vendedor", ["Todos"] + list(vendedores_config.keys()))
+        filtro_estado = st.selectbox("Estado de Pago", ["Todos", "Pendientes", "Pagados"])
     with col_f3:
-        filtro_estado = st.selectbox("Estado de Pago", ["Todos", "Pagados", "Pendientes"])
-    with col_f4:
-        apps_opts = ["Todos"] + [a for a in df['Apps'].unique() if a]
+        apps_opts = ["Todas"] + sorted([a for a in df["Apps"].unique() if a])
         filtro_equipo = st.selectbox("Filtrar por App", apps_opts)
+    with col_f4:
+        filas_por_pagina = st.selectbox("Mostrar por página", [30, 50, 100], index=0)
 
     df_filtrado = df.copy()
     if busqueda:
+        q = busqueda.strip()
         df_filtrado = df_filtrado[
-            df_filtrado['Nombre'].str.contains(busqueda, case=False, na=False) |
-            df_filtrado['Telefono'].str.contains(busqueda, case=False, na=False)
+            df_filtrado["Nombre"].str.contains(q, case=False, na=False) |
+            df_filtrado["Telefono"].str.contains(q, case=False, na=False)
         ]
-    if filtro_vendedor != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Vendedor'] == filtro_vendedor]
     if filtro_estado == "Pagados":
-        df_filtrado = df_filtrado[df_filtrado['Pagado'] == True]
+        df_filtrado = df_filtrado[df_filtrado["Pagado"] == True]
     elif filtro_estado == "Pendientes":
-        df_filtrado = df_filtrado[df_filtrado['Pagado'] == False]
-    if filtro_equipo != "Todos":
-        df_filtrado = df_filtrado[df_filtrado['Apps'] == filtro_equipo]
+        df_filtrado = df_filtrado[df_filtrado["Pagado"] == False]
+    if filtro_equipo != "Todas":
+        df_filtrado = df_filtrado[df_filtrado["Apps"] == filtro_equipo]
 
-    st.write(f"Mostrando **{len(df_filtrado)}** clientes de **{len(df)}** totales.")
+    total_filt = len(df_filtrado)
+    total_paginas = max(1, math.ceil(total_filt / filas_por_pagina))
 
-    # Inicializar estado para confirmación de eliminación
-    if "confirmar_eliminar" not in st.session_state:
-        st.session_state.confirmar_eliminar = None
+    col_info, col_pag = st.columns([2, 1])
+    with col_info:
+        st.write(f"Mostrando **{total_filt}** clientes encontrados (de **{len(df)}** totales).")
+    with col_pag:
+        if total_paginas > 1:
+            pagina_actual = st.number_input(f"Página (1 a {total_paginas})", min_value=1, max_value=total_paginas, value=1, step=1, key="pag_clientes")
+        else:
+            pagina_actual = 1
+
+    inicio = (pagina_actual - 1) * filas_por_pagina
+    fin    = inicio + filas_por_pagina
+    df_pagina = df_filtrado.iloc[inicio:fin]
+
+    if "confirmar_eliminar_id" not in st.session_state:
+        st.session_state.confirmar_eliminar_id = None
+
+    # Diálogo de confirmación de eliminación (arriba para que sea visible al instante)
+    if st.session_state.confirmar_eliminar_id is not None:
+        elim_id = st.session_state.confirmar_eliminar_id
+        if elim_id in df_raw.index:
+            nom_elim = df_raw.at[elim_id, "Nombre"]
+            tel_elim = df_raw.at[elim_id, "Telefono"]
+            st.error(f"⚠️ ¿Estás seguro que deseás eliminar a **{nom_elim}** (Tel: `{tel_elim}`, Fila #{elim_id+1})? Esta acción no se puede deshacer.")
+            col_si, col_no, _ = st.columns([1, 1, 3])
+            with col_si:
+                if st.button("✅ Sí, eliminar definitivamente", type="primary", use_container_width=True):
+                    df_sin_cliente = df_raw.drop(index=elim_id).reset_index(drop=True)
+                    with st.spinner("Eliminando cliente..."):
+                        ok = save_df_instant(df_sin_cliente, f"Eliminar cliente {nom_elim}")
+                    if ok:
+                        st.session_state.confirmar_eliminar_id = None
+                        st.success(f"Cliente {nom_elim} eliminado.")
+                        st.rerun()
+            with col_no:
+                if st.button("❌ Cancelar", use_container_width=True):
+                    st.session_state.confirmar_eliminar_id = None
+                    st.rerun()
+        else:
+            st.session_state.confirmar_eliminar_id = None
 
     # Encabezados de la tabla
-    col_h1, col_h2, col_h3, col_h4, col_h5, col_h6 = st.columns([2.5, 1.5, 1.2, 1.5, 1.5, 0.6])
-    with col_h1: st.markdown("**Nombre**")
+    col_h1, col_h2, col_h3, col_h4, col_h5 = st.columns([2.6, 1.5, 1.0, 1.3, 1.8])
+    with col_h1: st.markdown("**# / Nombre**")
     with col_h2: st.markdown("**Teléfono**")
     with col_h3: st.markdown("**App**")
-    with col_h4: st.markdown("**Mes**")
-    with col_h5: st.markdown("**Vendedor**")
-    with col_h6: st.markdown("**Baja**")
+    with col_h4: st.markdown("**Estado / Mes**")
+    with col_h5: st.markdown("**Acciones Rápidas**")
     st.divider()
 
-    for row_idx, row in df_filtrado.iterrows():
-        col_r1, col_r2, col_r3, col_r4, col_r5, col_r6 = st.columns([2.5, 1.5, 1.2, 1.5, 1.5, 0.6])
-        mes_val = str(row['Mes'])
-        es_pagado = '[P]' in mes_val.upper()
-        mes_color = "color:#6ee7b7;font-weight:600;" if es_pagado else "color:#fdba74;font-weight:600;"
-        with col_r1: st.write(row['Nombre'])
-        with col_r2: st.write(str(row['Telefono']) if str(row['Telefono']) not in ['nan', ''] else '—')
-        with col_r3: st.write(row['Apps'])
-        with col_r4: st.markdown(f"<span style='{mes_color}'>{mes_val}</span>", unsafe_allow_html=True)
-        with col_r5: st.write(row['Vendedor'])
-        with col_r6:
-            if st.button("🗑️", key=f"del_btn_{row_idx}", help=f"Eliminar a {row['Nombre']}"):
-                st.session_state.confirmar_eliminar = row['Nombre']
-                st.rerun()
+    for _, row in df_pagina.iterrows():
+        r_id      = int(row["RowID"])
+        mes_val   = str(row["Mes"])
+        es_pagado = bool(row["Pagado"])
+        mes_limp  = str(row["Mes_Limpio"]) if row["Mes_Limpio"] else mes_activo_default
+        mes_color = "color:#34d399;font-weight:700;" if es_pagado else "color:#fb923c;font-weight:700;"
 
-    # Diálogo de confirmación de eliminación
-    if st.session_state.confirmar_eliminar:
-        nombre_a_eliminar = st.session_state.confirmar_eliminar
-        st.error(f"⚠️ ¿Estás seguro que deseás eliminar a **{nombre_a_eliminar}**? Esta acción no se puede deshacer.")
-        col_si, col_no, _ = st.columns([1, 1, 4])
-        with col_si:
-            if st.button("✅ Sí, eliminar", type="primary", use_container_width=True):
-                df_filt = df_raw[df_raw['Nombre'] != nombre_a_eliminar]
-                with st.spinner("Eliminando en la nube..."):
-                    ok = github_write_csv(df_filt, csv_sha)
-                if ok:
-                    st.session_state.confirmar_eliminar = None
-                    st.success(f"Cliente {nombre_a_eliminar} eliminado.")
-                    st.rerun()
-        with col_no:
-            if st.button("❌ Cancelar", use_container_width=True):
-                st.session_state.confirmar_eliminar = None
-                st.rerun()
-
-
-# ===================================================
-# TAB 3 — REGISTRAR PAGOS / CRUD
-# ===================================================
-with tab_pagos:
-    subtab_mod, subtab_crear = st.tabs([
-        "💳 Modificar / Registrar Pago",
-        "➕ Agregar Nuevo Cliente"
-    ])
-
-    # --- MODIFICAR ---
-    with subtab_mod:
-        st.subheader("Seleccioná un Cliente para Gestionar")
-        lista_clientes = sorted(df['Nombre'].tolist())
-        cliente_sel = st.selectbox("Elegí el cliente", lista_clientes)
-
-        if cliente_sel:
-            datos = df_raw[df_raw['Nombre'] == cliente_sel].iloc[0]
-            esta_pagado   = '[P]' in str(datos['Mes']).upper()
-            mes_limpio    = str(datos['Mes']).split('[')[0].strip().upper()
-
-            st.write("---")
-            col_m1, col_m2 = st.columns(2)
-            with col_m1:
-                nuevo_nombre   = st.text_input("Nombre Completo", datos['Nombre'])
-                nuevo_tel      = st.text_input("Teléfono", datos['Telefono'])
-                lista_vend     = list(vendedores_config.keys())
-                vend_actual    = datos['Vendedor'] if datos['Vendedor'] in lista_vend else lista_vend[0]
-                nuevo_vendedor = st.selectbox("Vendedor", lista_vend, index=lista_vend.index(vend_actual))
-            with col_m2:
-                nuevo_equipo   = st.selectbox("Apps", ["ON PLAY", "MULTI GEMA"],
-                                              index=0 if str(datos.get('Apps', 'ON PLAY')) == "ON PLAY" else 1)
-                meses_lista    = ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
-                                  "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"]
-                mes_idx        = meses_lista.index(mes_limpio) if mes_limpio in meses_lista else 0
-                nuevo_mes      = st.selectbox("Mes de Facturación", meses_lista, index=mes_idx)
-                nuevo_pagado   = st.checkbox("Registrar como PAGADO", value=esta_pagado)
-
-            mes_salida = f"{nuevo_mes} [P]" if nuevo_pagado else nuevo_mes
-
-            if st.button("Guardar Cambios del Cliente"):
-                idx = df_raw[df_raw['Nombre'] == cliente_sel].index[0]
-                df_raw.at[idx, 'Nombre']   = nuevo_nombre.strip().upper()
-                df_raw.at[idx, 'Telefono'] = nuevo_tel.strip()
-                df_raw.at[idx, 'Apps']   = nuevo_equipo
-                df_raw.at[idx, 'Mes']      = mes_salida
-                df_raw.at[idx, 'Vendedor'] = nuevo_vendedor
-                with st.spinner("Guardando en la nube..."):
-                    ok = github_write_csv(df_raw, csv_sha)
-                if ok:
-                    st.success(f"Datos de {cliente_sel} actualizados!")
-                    st.rerun()
-
-    # --- AGREGAR ---
-    with subtab_crear:
-        st.subheader("Registrar un Nuevo Cliente")
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            c_nombre2   = st.text_input("Nombre Completo", key="nc_nombre")
-            c_tel2      = st.text_input("Teléfono", key="nc_tel")
-            c_vendedor2 = st.selectbox("Vendedor", list(vendedores_config.keys()), key="nc_vend")
-        with col_c2:
-            c_equipo2   = st.selectbox("Apps", ["ON PLAY", "MULTI GEMA"], key="nc_equipo")
-            c_mes2      = st.selectbox("Mes de Facturación",
-                ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
-                 "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"], key="nc_mes")
-            c_pagado2   = st.checkbox("Registrar como PAGADO", key="nc_pagado")
-
-        if st.button("Crear y Guardar Cliente"):
-            if not c_nombre2.strip():
-                st.error("Ingresá un nombre válido.")
-            else:
-                mes_sal2 = f"{c_mes2} [P]" if c_pagado2 else c_mes2
-                nueva    = {"Nombre": c_nombre2.strip().upper(), "Telefono": c_tel2.strip(),
-                            "Apps": c_equipo2, "Mes": mes_sal2, "Vendedor": c_vendedor2}
-                df_nuevo = pd.concat([df_raw, pd.DataFrame([nueva])], ignore_index=True)
-                with st.spinner("Guardando en la nube..."):
-                    ok = github_write_csv(df_nuevo, csv_sha)
-                if ok:
-                    st.success(f"Cliente {c_nombre2.upper()} agregado!")
-                    st.rerun()
-
-
-
-# ===================================================
-# TAB 4 — GESTIÓN DE VENDEDORES
-# ===================================================
-with tab_vendedores:
-    st.subheader("Configuración de Vendedores")
-    col_v1, col_v2 = st.columns([1, 2])
-
-    with col_v1:
-        st.markdown("### Agregar Nuevo Vendedor")
-        nv_nombre = st.text_input("Nombre del Vendedor").strip().upper()
-        nv_precio = st.number_input("Lo que te paga por cliente ($)", min_value=0.0, value=4000.0, step=500.0)
-        if st.button("Registrar Vendedor"):
-            if not nv_nombre:
-                st.error("Escribe un nombre.")
-            elif nv_nombre in vendedores_config:
-                st.error("Este vendedor ya existe.")
-            else:
-                vendedores_config[nv_nombre] = {"nombre": nv_nombre, "precio_vendedor": nv_precio}
-                with st.spinner("Guardando..."):
-                    github_write_json(CONFIG_FILE, vendedores_config, config_sha)
-                st.success(f"Vendedor '{nv_nombre}' agregado!")
-                st.rerun()
-
-    with col_v2:
-        st.markdown("### Vendedores Registrados")
-        vendedores_editados = {}
-        for vend, datos in list(vendedores_config.items()):
-            with st.expander(f"Vendedor: {vend}", expanded=True):
-                col_e1, col_e2 = st.columns([2, 1])
-                with col_e1:
-                    nom_ed = st.text_input("Nombre", datos.get("nombre", vend), key=f"nom_{vend}").strip().upper()
-                with col_e2:
-                    prc_ed = st.number_input("Monto que te paga ($)", min_value=0.0,
-                                             value=float(datos.get("precio_vendedor", 4000.0)),
-                                             key=f"prc_{vend}")
-                if st.button(f"Quitar {vend}", key=f"del_{vend}"):
-                    if len(vendedores_config) <= 1:
-                        st.error("Debe quedar al menos un vendedor.")
-                    else:
-                        del vendedores_config[vend]
-                        with st.spinner("Guardando..."):
-                            github_write_json(CONFIG_FILE, vendedores_config, config_sha)
-                        st.success(f"Vendedor '{vend}' eliminado.")
-                        st.rerun()
+        col_r1, col_r2, col_r3, col_r4, col_r5 = st.columns([2.6, 1.5, 1.0, 1.3, 1.8])
+        with col_r1:
+            st.write(f"**#{r_id+1}** — {row['Nombre']}")
+        with col_r2:
+            st.write(str(row["Telefono"]) if str(row["Telefono"]) not in ["nan", ""] else "—")
+        with col_r3:
+            st.write(row["Apps"])
+        with col_r4:
+            st.markdown(f"<span style='{mes_color}'>{mes_val}</span>", unsafe_allow_html=True)
+        with col_r5:
+            b_col1, b_col2 = st.columns([1.4, 0.6])
+            with b_col1:
+                if not es_pagado:
+                    if st.button("✅ Pagó", key=f"fast_pay_{r_id}", use_container_width=True, help="Marcar como PAGADO en 1 clic"):
+                        df_upd = df_raw.copy()
+                        df_upd.at[r_id, "Mes"] = f"{mes_limp} [P]"
+                        ok = save_df_instant(df_upd, f"Pago {row['Nombre']}")
+                        if ok:
+                            st.rerun()
                 else:
-                    vendedores_editados[nom_ed] = {"nombre": nom_ed, "precio_vendedor": prc_ed}
+                    if st.button("↩️ Quitar [P]", key=f"fast_unpay_{r_id}", use_container_width=True, help="Volver a PENDIENTE"):
+                        df_upd = df_raw.copy()
+                        df_upd.at[r_id, "Mes"] = mes_limp
+                        ok = save_df_instant(df_upd, f"Pasar a pendiente {row['Nombre']}")
+                        if ok:
+                            st.rerun()
+            with b_col2:
+                if st.button("🗑️", key=f"del_btn_{r_id}", use_container_width=True, help=f"Eliminar a {row['Nombre']}"):
+                    st.session_state.confirmar_eliminar_id = r_id
+                    st.rerun()
 
-        if st.button("Guardar Configuracion de Vendedores"):
-            with st.spinner("Guardando..."):
-                github_write_json(CONFIG_FILE, vendedores_editados, config_sha)
-            st.success("Configuracion guardada!")
-            st.rerun()
-
-# ============================================================
-# HELPER: FORMATTEAR TELÉFONO DE ARGENTINA PARA WHATSAPP
-# ============================================================
-def format_argentina_phone(phone):
-    """
-    Formatea números de teléfono al estándar E.164 para WhatsApp en Argentina.
-    Formato esperado: 54 + 9 + código de área (sin 0) + número local (sin 15).
-    """
-    if not phone or pd.isna(phone):
-        return None
-    
-    # Conservar solo dígitos
-    clean = "".join(filter(str.isdigit, str(phone)))
-    
-    if not clean:
-        return None
-        
-    # Si ya empieza con 54, asegurarse del 9 si tiene largo de celular estándar
-    if clean.startswith("54"):
-        if len(clean) == 12 and not clean.startswith("549"):
-            # Insertar 9 después de 54
-            clean = "549" + clean[2:]
-        return clean
-        
-    # Si tiene 10 dígitos (ej: 2281302299 o 2983569326)
-    if len(clean) == 10:
-        return "549" + clean
-        
-    # Si empieza con 9 y tiene 11 dígitos (ej: 92281302299)
-    if len(clean) == 11 and clean.startswith("9"):
-        return "54" + clean
-        
-    # Si tiene menos de 10 dígitos, probablemente esté incompleto o local sin código de área
-    if len(clean) < 10:
-        return None
-        
-    return "549" + clean
 
 # ===================================================
-# TAB 5 — AVISOS WHATSAPP (GRATIS)
+# TAB 3 — EDITAR CLIENTE / SUMAR 2DA CUENTA
+# ===================================================
+with tab_crud:
+    st.subheader("✏️ Modificar Datos de un Cliente o Sumar 2da Cuenta")
+
+    # Identificar por Nombre + Teléfono + ID para que nunca se pisen homónimos
+    opciones_edicion = {
+        f"{row['Nombre']} ({row['Telefono'] if row['Telefono'] else 'Sin tel'}) — Fila #{int(row['RowID'])+1}": int(row["RowID"])
+        for _, row in df.sort_values("Nombre").iterrows()
+    }
+
+    cliente_label_sel = st.selectbox("Buscá y seleccioná el cliente", list(opciones_edicion.keys()))
+
+    if cliente_label_sel:
+        sel_id      = opciones_edicion[cliente_label_sel]
+        datos       = df_raw.iloc[sel_id]
+        esta_pagado = "[P]" in str(datos["Mes"]).upper()
+        mes_limpio  = str(datos["Mes"]).split("[")[0].strip().upper()
+
+        st.write("---")
+        col_m1, col_m2 = st.columns(2)
+        with col_m1:
+            nuevo_nombre = st.text_input("Nombre Completo", datos["Nombre"], key=f"ed_nom_{sel_id}")
+            nuevo_tel    = st.text_input("Teléfono", datos["Telefono"], key=f"ed_tel_{sel_id}")
+        with col_m2:
+            apps_disponibles = ["ON PLAY", "MarTV", "MULTI GEMA"]
+            app_actual = str(datos.get("Apps", "ON PLAY"))
+            if app_actual not in apps_disponibles:
+                apps_disponibles.append(app_actual)
+            nuevo_equipo = st.selectbox("App", apps_disponibles, index=apps_disponibles.index(app_actual), key=f"ed_app_{sel_id}")
+            mes_idx      = MESES_LISTA.index(mes_limpio) if mes_limpio in MESES_LISTA else mes_default_idx
+            nuevo_mes    = st.selectbox("Mes de Facturación", MESES_LISTA, index=mes_idx, key=f"ed_mes_{sel_id}")
+            nuevo_pagado = st.checkbox("Registrar como PAGADO", value=esta_pagado, key=f"ed_pag_{sel_id}")
+
+        mes_salida = f"{nuevo_mes} [P]" if nuevo_pagado else nuevo_mes
+
+        col_btn_save, col_btn_dup, _ = st.columns([1.5, 1.8, 2])
+        with col_btn_save:
+            if st.button("💾 Guardar Cambios", type="primary", use_container_width=True):
+                df_upd = df_raw.copy()
+                df_upd.at[sel_id, "Nombre"]   = nuevo_nombre.strip().upper()
+                df_upd.at[sel_id, "Telefono"] = nuevo_tel.strip()
+                df_upd.at[sel_id, "Apps"]     = nuevo_equipo
+                df_upd.at[sel_id, "Mes"]      = mes_salida
+                df_upd.at[sel_id, "Vendedor"] = "PROPIO"
+                with st.spinner("Guardando cambios..."):
+                    ok = save_df_instant(df_upd, f"Editar cliente {nuevo_nombre.strip().upper()}")
+                if ok:
+                    st.success(f"¡Datos de {nuevo_nombre.strip().upper()} actualizados!")
+                    st.rerun()
+
+        with col_btn_dup:
+            nombre_2da = f"{datos['Nombre'].strip().upper()} 2"
+            if st.button(f"➕ Crear 2da Cuenta ({nombre_2da})", use_container_width=True, help="Crea otra cuenta con el mismo teléfono y marca pagada"):
+                nueva_2da = {
+                    "Nombre": nombre_2da,
+                    "Telefono": str(datos["Telefono"]).strip(),
+                    "Apps": nuevo_equipo,
+                    "Mes": f"{mes_activo_default} [P]",
+                    "Vendedor": "PROPIO"
+                }
+                df_nuevo = pd.concat([df_raw, pd.DataFrame([nueva_2da])], ignore_index=True)
+                with st.spinner("Creando segunda cuenta..."):
+                    ok = save_df_instant(df_nuevo, f"Crear 2da cuenta {nombre_2da}")
+                if ok:
+                    st.success(f"¡Segunda cuenta '{nombre_2da}' creada y marcada como PAGADA!")
+                    st.rerun()
+
+
+# ===================================================
+# TAB 4 — AVISOS WHATSAPP (PAGINADO TURBO)
 # ===================================================
 with tab_whatsapp:
-    # 1. Configurar el Mensaje Template
-    st.subheader("📝 Configurar Mensaje de Cobro")
-    
-    # Template por defecto (con Alias)
-    default_template = "Hola *{nombre}*! Te recordamos que tu abono de *Mar TV* de *{mes}* es de *${monto}*.\n\n💳 *Alias oficial:* streamvision.mp\n👤 *Titular:* Maria Celeste Laitan\n\nPor favor envianos el comprobante por este medio para registrar tu pago. ¡Muchas gracias! 🙌"
-    
-    mensaje_template = st.text_area(
-        "Edita el texto del mensaje. Podés usar: {nombre}, {mes}, {monto}",
-        value=default_template,
-        height=150,
-        help="Las palabras entre llaves {} se reemplazarán automáticamente por los datos de cada cliente."
-    )
-    
-    # Selector de mes para el mensaje
-    meses_lista = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
-    mes_aviso = st.selectbox(
-        "📅 Mes a incluir en el aviso de cobro:",
-        meses_lista,
-        index=10,  # NOVIEMBRE por defecto
-        help="Este mes reemplazará la palabra {mes} en el mensaje que le envíes a los clientes."
-    )
-    
-    # Subir Recibo del Mes
-    st.write("---")
-    st.write("### 🖼️ Recibo / Imagen del Mes (Opcional)")
-    
-    adjuntar_link = False
-    if recibo_sha:
-        import time as _time
-        st.image(f"{RECIBO_RAW_URL}?v={recibo_sha[:8]}", caption="Recibo cargado para este mes", use_container_width=True)
-        adjuntar_link = st.checkbox("🔗 Adjuntar link del recibo al mensaje", value=True)
-        col_img1, col_img2 = st.columns([2, 1])
-        with col_img2:
-            if st.button("🗑️ Eliminar recibo actual", use_container_width=True, type="secondary"):
-                with st.spinner("Eliminando recibo..."):
-                    ok = github_delete_file("recibo_mes.png", recibo_sha, "Eliminar recibo del mes")
-                if ok:
-                    st.success("Recibo eliminado!")
-                    st.rerun()
-    else:
-        st.warning("No hay ningún recibo cargado para este mes.")
+    st.subheader("📝 Configurar Mensaje de Cobro por WhatsApp")
 
-    uploaded_file = st.file_uploader("Subir nueva imagen de recibo:", type=["png", "jpg", "jpeg"])
-    if uploaded_file is not None:
-        size_mb = uploaded_file.size / (1024 * 1024)
-        if size_mb > 10:
-            st.error(f"La imagen pesa {size_mb:.1f}MB. El máximo es 10MB. Comprimila antes de subir.")
-        else:
-            if size_mb > 3:
-                st.warning(f"La imagen pesa {size_mb:.1f}MB. Recomendamos imágenes menores a 3MB para mejor rendimiento.")
-            new_image_bytes = uploaded_file.read()
-            if st.button("💾 Guardar y actualizar imagen"):
-                with st.spinner("Subiendo imagen..."):
-                    ok = github_write_image("recibo_mes.png", new_image_bytes, recibo_sha)
-                if ok:
-                    st.success("¡Imagen cargada exitosamente!")
-                    st.rerun()
-                
+    default_template = (
+        "📺 *MAR TV — Abono {mes}*\n\n"
+        "¡Hola *{nombre}*! Te recordamos que se encuentra habilitado el pago del abono mensual de *{mes} (${monto})*.\n\n"
+        "💳 *Alias oficial:* streamvision.mp\n"
+        "👤 *Titular:* Maria Celeste Laitan\n\n"
+        "📩 _Una vez realizada la transferencia, por favor envianos el comprobante por este chat para registrar tu pago._ ¡Muchas gracias! 🙌"
+    )
+
+    mensaje_template = st.text_area(
+        "Editá el texto del mensaje. Podés usar: {nombre}, {mes}, {monto}",
+        value=default_template,
+        height=160
+    )
+
+    mes_aviso = st.selectbox(
+        "📅 Mes a incluir en el aviso:",
+        MESES_LISTA,
+        index=mes_default_idx
+    )
+
     st.write("---")
-    
-    # Opción de plataforma
+    with st.expander("🖼️ Imagen / Placa de Abono del Mes (Opcional)", expanded=False):
+        recibo_sha = load_image_cached(token_hash)
+        adjuntar_link = False
+        if recibo_sha:
+            st.image(f"{RECIBO_RAW_URL}?v={recibo_sha[:8]}", caption="Placa cargada actualmente", width=320)
+            adjuntar_link = st.checkbox("🔗 Adjuntar link de la imagen al mensaje", value=False)
+            if st.button("🗑️ Eliminar imagen actual", type="secondary"):
+                if github_delete_file("recibo_mes.png", recibo_sha, "Eliminar recibo del mes"):
+                    st.success("Imagen eliminada.")
+                    st.rerun()
+        uploaded_file = st.file_uploader("Subir nueva placa del mes:", type=["png", "jpg", "jpeg"])
+        if uploaded_file is not None:
+            if st.button("💾 Guardar imagen en la nube"):
+                if github_write_image("recibo_mes.png", uploaded_file.read(), recibo_sha):
+                    st.success("¡Imagen actualizada!")
+                    st.rerun()
+
     whatsapp_platform = st.radio(
         "Abrir WhatsApp en:",
         ["WhatsApp Web (Recomendado para PC / Google Chrome)", "WhatsApp App / Celular (wa.me)"],
         horizontal=True
     )
 
-    # 2. Clientes Impagos / Pendientes (Listado Individual)
     st.write("---")
-    st.write("### 👥 Clientes Pendientes de Pago")
-    
-    # Filtro por vendedor específico para WhatsApp
-    lista_vend_wa = ["Todos"] + list(vendedores_config.keys())
-    filtro_vend_wa = st.selectbox("Filtrar por Vendedor", lista_vend_wa, key="wa_filtro_vendedor")
-    
-    # Obtener lista de clientes pendientes
-    df_pendientes = df[df['Pagado'] == False].copy()
-    if filtro_vend_wa != "Todos":
-        df_pendientes = df_pendientes[df_pendientes['Vendedor'] == filtro_vend_wa]
-        
+    st.subheader("👥 Clientes Pendientes de Pago")
+
+    df_pendientes = df[df["Pagado"] == False].copy()
+
     if df_pendientes.empty:
-        st.success("¡Buenísimo! No hay clientes pendientes con los filtros seleccionados.")
+        st.success("🎉 ¡No hay clientes pendientes de pago!")
     else:
-        st.write(f"Hay **{len(df_pendientes)}** clientes pendientes.")
-        
-        # Buscador de cliente pendiente
-        busqueda_wa = st.text_input("Buscar cliente pendiente por nombre o teléfono", key="wa_busqueda")
+        col_wa_search, col_wa_pag = st.columns([2.5, 1])
+        with col_wa_search:
+            busqueda_wa = st.text_input("🔍 Buscar cliente pendiente por nombre o teléfono", key="wa_busqueda")
         if busqueda_wa:
+            q_wa = busqueda_wa.strip()
             df_pendientes = df_pendientes[
-                df_pendientes['Nombre'].str.contains(busqueda_wa, case=False, na=False) |
-                df_pendientes['Telefono'].str.contains(busqueda_wa, case=False, na=False)
+                df_pendientes["Nombre"].str.contains(q_wa, case=False, na=False) |
+                df_pendientes["Telefono"].str.contains(q_wa, case=False, na=False)
             ]
-            
-        # Tabla interactiva
-        # Encabezados
-        col_name, col_tel, col_vend, col_actions = st.columns([2.5, 1.5, 1.5, 2.5])
-        with col_name:
-            st.markdown("**Cliente**")
-        with col_tel:
-            st.markdown("**Teléfono**")
-        with col_vend:
-            st.markdown("**Vendedor**")
-        with col_actions:
-            st.markdown("**Acciones**")
-            
+
+        total_pend_filt = len(df_pendientes)
+        wa_por_pagina = 30
+        total_pag_wa = max(1, math.ceil(total_pend_filt / wa_por_pagina))
+
+        with col_wa_pag:
+            if total_pag_wa > 1:
+                pag_wa = st.number_input(f"Página (1 a {total_pag_wa})", min_value=1, max_value=total_pag_wa, value=1, step=1, key="pag_wa_num")
+            else:
+                pag_wa = 1
+
+        st.write(f"Hay **{total_pend_filt}** clientes pendientes (mostrando página {pag_wa} de {total_pag_wa}).")
+
+        ini_wa = (pag_wa - 1) * wa_por_pagina
+        df_wa_page = df_pendientes.iloc[ini_wa : ini_wa + wa_por_pagina]
+
+        col_name, col_tel, col_actions = st.columns([2.8, 1.8, 2.4])
+        with col_name: st.markdown("**# / Cliente**")
+        with col_tel:  st.markdown("**Teléfono**")
+        with col_actions: st.markdown("**Acciones**")
         st.divider()
-        
-        import urllib.parse
-        
-        for idx, row in df_pendientes.iterrows():
-            c_name = row['Nombre']
-            c_tel = row['Telefono']
-            c_vend = row['Vendedor']
-            c_mes_limpio = row['Mes_Limpio']
-            
-            # Formatear teléfono
+
+        for _, row in df_wa_page.iterrows():
+            r_id      = int(row["RowID"])
+            c_name    = row["Nombre"]
+            c_tel     = row["Telefono"]
+            mes_limp  = str(row["Mes_Limpio"]) if row["Mes_Limpio"] else mes_activo_default
             formatted_phone = format_argentina_phone(c_tel)
-            
-            # Formatear mensaje
-            # Reemplazar placeholders en el template
+
             try:
                 mensaje_final = mensaje_template.format(
                     nombre=c_name.title(),
                     mes=mes_aviso.title(),
                     monto=f"{abono_general:,.0f}"
                 )
-            except Exception as e:
-                mensaje_final = mensaje_template  # fallback
-                
-            if adjuntar_link:
-                mensaje_final += f"\n\n\U0001f9fe Tu recibo de {mes_aviso.title()}: {RECIBO_RAW_URL}"
-                
+            except Exception:
+                mensaje_final = mensaje_template
+
             encoded_msg = urllib.parse.quote(mensaje_final)
-            
-            # Generar URL
             if whatsapp_platform.startswith("WhatsApp Web"):
                 wa_url = f"https://web.whatsapp.com/send?phone={formatted_phone}&text={encoded_msg}"
             else:
                 wa_url = f"https://wa.me/{formatted_phone}?text={encoded_msg}"
-                
-            col_r_name, col_r_tel, col_r_vend, col_r_actions = st.columns([2.5, 1.5, 1.5, 2.5])
-            
+
+            col_r_name, col_r_tel, col_r_actions = st.columns([2.8, 1.8, 2.4])
             with col_r_name:
-                st.write(c_name)
+                st.write(f"**#{r_id+1}** — {c_name}")
             with col_r_tel:
-                st.write(c_tel if (c_tel and str(c_tel).strip() and str(c_tel) != 'nan') else "⚠️ Sin Tel")
-            with col_r_vend:
-                st.write(c_vend)
+                st.write(c_tel if (c_tel and str(c_tel).strip() and str(c_tel) != "nan") else "⚠️ Sin Tel")
             with col_r_actions:
                 col_btn_send, col_btn_pay = st.columns([1.2, 1.0])
                 with col_btn_send:
                     if formatted_phone:
                         st.link_button("✉️ Enviar", wa_url, use_container_width=True)
                     else:
-                        st.button("❌ Sin Tel", disabled=True, use_container_width=True, key=f"disabled_wa_{idx}")
+                        st.button("❌ Sin Tel", disabled=True, use_container_width=True, key=f"dis_wa_{r_id}")
                 with col_btn_pay:
-                    # Botón para marcar como pagado directamente
-                    if st.button("✅ Pago", key=f"pay_wa_{idx}", use_container_width=True, help="Marcar como pagado sin salir"):
-                        # Encontrar en df_raw original y marcar pagado
-                        raw_idx = df_raw[df_raw['Nombre'] == c_name].index[0]
-                        df_raw.at[raw_idx, 'Mes'] = f"{row['Mes']} [P]"
-                        with st.spinner("Registrando pago..."):
-                            ok = github_write_csv(df_raw, csv_sha)
+                    if st.button("✅ Pagó", key=f"pay_wa_{r_id}", use_container_width=True):
+                        df_upd = df_raw.copy()
+                        df_upd.at[r_id, "Mes"] = f"{mes_limp} [P]"
+                        ok = save_df_instant(df_upd, f"Pago {c_name}")
                         if ok:
-                            st.success(f"{c_name} marcado como PAGADO!")
                             st.rerun()
