@@ -108,15 +108,18 @@ def get_token():
     except Exception:
         return os.environ.get("GITHUB_TOKEN", "")
 
+@st.cache_resource(ttl=300)
+def _get_cached_repo(token):
+    auth = Auth.Token(token)
+    g = Github(auth=auth, timeout=10)
+    return g.get_repo(f"radioprolait/{REPO_NAME}")
+
 def get_repo():
     token = get_token()
     if not token:
         st.error("No se encontró el token de GitHub. Configurá los secrets de Streamlit.")
         st.stop()
-    auth = Auth.Token(token)
-    g = Github(auth=auth)
-    user = g.get_user()
-    return user.get_repo(REPO_NAME)
+    return _get_cached_repo(token)
 
 # ============================================================
 # FUNCIONES DE DATOS — GITHUB
