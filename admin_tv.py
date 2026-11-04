@@ -148,12 +148,19 @@ def github_read_csv():
         return pd.DataFrame(columns=["Nombre", "Telefono", "Apps", "Mes", "Vendedor"]), None
 
 def github_write_csv(df, sha):
-    """Guarda el DataFrame como CSV en GitHub."""
+    """Guarda el DataFrame como CSV en GitHub (con reintento automático de SHA)."""
     try:
         repo = get_repo()
         csv_content = df.to_csv(index=False, encoding='utf-8')
         if sha:
-            repo.update_file(CSV_FILE, "Actualizar base de clientes", csv_content, sha)
+            try:
+                repo.update_file(CSV_FILE, "Actualizar base de clientes", csv_content, sha)
+            except GithubException as ge:
+                if ge.status in (409, 500, 502, 503):
+                    fresh_sha = repo.get_contents(CSV_FILE).sha
+                    repo.update_file(CSV_FILE, "Actualizar base de clientes", csv_content, fresh_sha)
+                else:
+                    raise ge
         else:
             repo.create_file(CSV_FILE, "Crear base de clientes", csv_content)
         st.cache_data.clear()
@@ -469,8 +476,8 @@ with tab_dashboard:
             c_mes      = st.selectbox("Mes de Facturación",
                 ["ENERO","FEBRERO","MARZO","ABRIL","MAYO","JUNIO",
                  "JULIO","AGOSTO","SEPTIEMBRE","OCTUBRE","NOVIEMBRE","DICIEMBRE"],
-                index=5, key="qc_mes")
-            c_pagado   = st.checkbox("Registrar como PAGADO", value=False, key="qc_pagado")
+                index=10, key="qc_mes")
+            c_pagado   = st.checkbox("Registrar como PAGADO", value=True, key="qc_pagado")
 
         if st.button("🚀 PUM! CREAR CLIENTE", key="qc_btn"):
             if not c_nombre.strip():
@@ -841,7 +848,7 @@ with tab_whatsapp:
     st.subheader("📝 Configurar Mensaje de Cobro")
     
     # Template por defecto (con Alias)
-    default_template = "Hola *{nombre}*! Te recordamos que tu abono de TV Digital de *{mes}* es de *${monto}*.\n\n*Alias de transferencia:* onplaymp\n\nPara informar tu pago o realizar consultas, podés responder a este chat. ¡Muchas gracias! 😊"
+    default_template = "Hola *{nombre}*! Te recordamos que tu abono de *Mar TV* de *{mes}* es de *${monto}*.\n\n💳 *Alias oficial:* streamvision.mp\n👤 *Titular:* Maria Celeste Laitan\n\nPor favor envianos el comprobante por este medio para registrar tu pago. ¡Muchas gracias! 🙌"
     
     mensaje_template = st.text_area(
         "Edita el texto del mensaje. Podés usar: {nombre}, {mes}, {monto}",
@@ -855,7 +862,7 @@ with tab_whatsapp:
     mes_aviso = st.selectbox(
         "📅 Mes a incluir en el aviso de cobro:",
         meses_lista,
-        index=6,  # JULIO por defecto
+        index=10,  # NOVIEMBRE por defecto
         help="Este mes reemplazará la palabra {mes} en el mensaje que le envíes a los clientes."
     )
     
